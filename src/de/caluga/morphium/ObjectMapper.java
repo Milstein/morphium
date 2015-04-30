@@ -1,6 +1,6 @@
 package de.caluga.morphium;
 
-import com.mongodb.DBObject;
+import org.bson.Document;
 import org.json.simple.parser.ParseException;
 
 /**
@@ -14,9 +14,9 @@ public interface ObjectMapper {
 
     public String getCollectionName(Class cls);
 
-    public DBObject marshall(Object o);
+    public Document marshall(Object o);
 
-    public <T> T unmarshall(Class<? extends T> cls, DBObject o);
+    public <T> T unmarshall(Class<? extends T> cls, Document o);
 
     public <T> T unmarshall(Class<? extends T> cls, String json) throws ParseException;
 

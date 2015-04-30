@@ -5,8 +5,8 @@ package de.caluga.morphium;
  * and open the template in the editor.
  */
 
-import com.mongodb.DB;
 import com.mongodb.ServerAddress;
+import com.mongodb.async.client.MongoDatabase;
 import de.caluga.morphium.aggregation.Aggregator;
 import de.caluga.morphium.aggregation.AggregatorFactory;
 import de.caluga.morphium.aggregation.AggregatorFactoryImpl;
@@ -45,7 +45,7 @@ public class MorphiumConfig {
     private int writeCacheTimeout = 5000;
     private String database;
     @Transient
-    private DB db = null;
+    private MongoDatabase db = null;
     @Transient
     private MorphiumWriter writer;
     @Transient
@@ -138,6 +138,19 @@ public class MorphiumConfig {
     private int maxConnectionIdleTime = 1000;
     private int maxConnectionLifeTime = 5000;
     private String requiredReplicaSetName = null;
+    private String description;
+    private int maxWaitQueueSize;
+    private long serverSelectionTimeout;
+    private long maintenanceFrequency;
+    private long maintenanceInitialDelay;
+    private boolean heartbeatKeepAlive;
+    private int hearbeatReadTimeout;
+    private int hearbeatReceiveBufferSize;
+    private int heartbeatSendBufferSize;
+    private int receiveBufferSize;
+    private int sendBufferSize;
+    private boolean SSLEnabled;
+    private boolean SSLInvalidHostnameAllowed;
 
     public MorphiumConfig(Properties prop) {
         AnnotationAndReflectionHelper an = new AnnotationAndReflectionHelper(true); //settings always convert camel case
@@ -404,11 +417,11 @@ public class MorphiumConfig {
         this.bufferedWriter = bufferedWriter;
     }
 
-    public DB getDb() {
+    public MongoDatabase getDb() {
         return db;
     }
 
-    public void setDb(DB db) {
+    public void setDb(MongoDatabase db) {
         this.db = db;
     }
 
@@ -1094,5 +1107,114 @@ public class MorphiumConfig {
         this.logFile = logFile;
         System.getProperties().put("morphium.log.file", logFile);
 
+    }
+
+    public String getDescription() {
+        return description;
+    }
+
+    public void setDescription(String description) {
+        this.description = description;
+    }
+
+    public int getMaxWaitQueueSize() {
+        return maxWaitQueueSize;
+    }
+
+    public void setMaxWaitQueueSize(int maxWaitQueueSize) {
+        this.maxWaitQueueSize = maxWaitQueueSize;
+    }
+
+    public long getServerSelectionTimeout() {
+        return serverSelectionTimeout;
+    }
+
+    public void setServerSelectionTimeout(long serverSelectionTimeout) {
+        this.serverSelectionTimeout = serverSelectionTimeout;
+    }
+
+    public long getMaintenanceFrequency() {
+        return maintenanceFrequency;
+    }
+
+    public void setMaintenanceFrequency(long maintenanceFrequency) {
+        this.maintenanceFrequency = maintenanceFrequency;
+    }
+
+    public long getMaintenanceInitialDelay() {
+        return maintenanceInitialDelay;
+    }
+
+    public void setMaintenanceInitialDelay(long maintenanceInitialDelay) {
+        this.maintenanceInitialDelay = maintenanceInitialDelay;
+    }
+
+    public boolean getHeartbeatKeepAlive() {
+
+        return heartbeatKeepAlive;
+    }
+
+    public boolean isHeartbeatKeepAlive() {
+        return heartbeatKeepAlive;
+    }
+
+    public void setHeartbeatKeepAlive(boolean heartbeatKeepAlive) {
+        this.heartbeatKeepAlive = heartbeatKeepAlive;
+    }
+
+    public int getHearbeatReadTimeout() {
+        return hearbeatReadTimeout;
+    }
+
+    public void setHearbeatReadTimeout(int hearbeatReadTimeout) {
+        this.hearbeatReadTimeout = hearbeatReadTimeout;
+    }
+
+    public int getHearbeatReceiveBufferSize() {
+        return hearbeatReceiveBufferSize;
+    }
+
+    public void setHearbeatReceiveBufferSize(int hearbeatReceiveBufferSize) {
+        this.hearbeatReceiveBufferSize = hearbeatReceiveBufferSize;
+    }
+
+    public int getHeartbeatSendBufferSize() {
+        return heartbeatSendBufferSize;
+    }
+
+    public void setHeartbeatSendBufferSize(int heartbeatSendBufferSize) {
+        this.heartbeatSendBufferSize = heartbeatSendBufferSize;
+    }
+
+    public int getReceiveBufferSize() {
+        return receiveBufferSize;
+    }
+
+    public void setReceiveBufferSize(int receiveBufferSize) {
+        this.receiveBufferSize = receiveBufferSize;
+    }
+
+    public int getSendBufferSize() {
+        return sendBufferSize;
+    }
+
+    public void setSendBufferSize(int sendBufferSize) {
+        this.sendBufferSize = sendBufferSize;
+    }
+
+    public boolean isSSLEnabled() {
+        return SSLEnabled;
+    }
+
+    public void setSSLEnabled(boolean SSLEnabled) {
+        this.SSLEnabled = SSLEnabled;
+    }
+
+    public boolean isSSLInvalidHostnameAllowed() {
+        return SSLInvalidHostnameAllowed;
+    }
+
+    public void setSSLInvalidHostnameAllowed(boolean SSLInvalidHostnameAllowed) {
+        this.SSLInvalidHostnameAllowed = SSLInvalidHostnameAllowed;
     }
 }

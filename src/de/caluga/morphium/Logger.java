@@ -15,6 +15,7 @@ public class Logger {
     private String file;
     private PrintWriter out = new PrintWriter(new OutputStreamWriter(System.out));
     private boolean synced = false;
+    private boolean closeIt = true;
 
     public Logger(String name) {
         prfx = name;
@@ -30,11 +31,16 @@ public class Logger {
         if (getSetting("log.file." + name) != null) v = getSetting("log.file." + name);
         if (v != null) {
             file = v;
-            if (v.equals("-")) {
+            if (v.equals("-") || v.equals("STDOUT")) {
                 out = new PrintWriter(new OutputStreamWriter(System.out));
+                closeIt = false;
+            } else if (v.equals("STDERR")) {
+                out = new PrintWriter(new OutputStreamWriter(System.err));
+                closeIt = false;
             } else {
                 try {
                     out = new PrintWriter(new BufferedWriter(new FileWriter(v, true)));
+                    closeIt = true;
                 } catch (IOException e) {
                     error(null, e);
                 }
@@ -54,7 +60,8 @@ public class Logger {
     protected void finalize() throws Throwable {
         super.finalize();
         out.flush();
-        out.close();
+        if (closeIt)
+            out.close();
 
     }
 

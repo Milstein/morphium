@@ -5,10 +5,17 @@
 package de.caluga.morphium;
 
 import com.mongodb.*;
+import com.mongodb.async.SingleResultCallback;
+import com.mongodb.async.client.MongoClient;
+import com.mongodb.async.client.MongoClientSettings;
+import com.mongodb.async.client.MongoClients;
+import com.mongodb.async.client.MongoDatabase;
+import com.mongodb.connection.*;
 import de.caluga.morphium.aggregation.Aggregator;
 import de.caluga.morphium.annotations.*;
 import de.caluga.morphium.annotations.lifecycle.*;
 import de.caluga.morphium.async.AsyncOperationCallback;
+import de.caluga.morphium.async.AsyncOperationType;
 import de.caluga.morphium.cache.CacheHousekeeper;
 import de.caluga.morphium.cache.MorphiumCache;
 import de.caluga.morphium.query.MongoField;
@@ -21,6 +28,9 @@ import de.caluga.morphium.writer.BufferedMorphiumWriterImpl;
 import de.caluga.morphium.writer.MorphiumWriter;
 import de.caluga.morphium.writer.MorphiumWriterImpl;
 import net.sf.cglib.proxy.Enhancer;
+import org.bson.BsonInt32;
+import org.bson.BsonString;
+import org.bson.Document;
 import org.bson.types.ObjectId;
 
 import java.io.Serializable;
@@ -83,6 +93,7 @@ public class Morphium {
     private Integer maxWriteBatchSize;
 
     private ThreadPoolExecutor asyncOperationsThreadPool;
+    private MongoClient mongo;
 
     public MorphiumConfig getConfig() {
         return config;
@@ -134,26 +145,95 @@ public class Morphium {
             stats.put(k, new StatisticValue());
         }
         if (config.getDb() == null) {
-            MongoClientOptions.Builder o = MongoClientOptions.builder();
-            WriteConcern w = new WriteConcern(config.getGlobalW(), config.getWriteTimeout(), config.isGlobalFsync(), config.isGlobalJ());
-            o.writeConcern(w);
-            o.socketTimeout(config.getSocketTimeout());
-            o.connectTimeout(config.getConnectionTimeout());
-            o.connectionsPerHost(config.getMaxConnections());
-            o.socketKeepAlive(config.isSocketKeepAlive());
-            o.threadsAllowedToBlockForConnectionMultiplier(config.getBlockingThreadsMultiplier());
-            o.cursorFinalizerEnabled(config.isCursorFinalizerEnabled());
-            o.alwaysUseMBeans(config.isAlwaysUseMBeans());
-            o.heartbeatConnectTimeout(config.getHeartbeatConnectTimeout());
-            o.heartbeatFrequency(config.getHeartbeatFrequency());
-            o.heartbeatSocketTimeout(config.getHeartbeatSocketTimeout());
-            o.minConnectionsPerHost(config.getMinConnectionsPerHost());
-            o.minHeartbeatFrequency(config.getMinHearbeatFrequency());
-            o.localThreshold(config.getLocalThreashold());
-            o.maxConnectionIdleTime(config.getMaxConnectionIdleTime());
-            o.maxConnectionLifeTime(config.getMaxConnectionLifeTime());
-            o.requiredReplicaSetName(config.getRequiredReplicaSetName());
-            o.maxWaitTime(config.getMaxWaitTime());
+
+
+            ClusterSettings.Builder bld = ClusterSettings.builder().hosts(config.getAdr()).description(config.getDescription());
+            bld = bld.maxWaitQueueSize(config.getMaxWaitQueueSize());
+
+            bld = bld.mode(config.getAdr().size() > 0 ? ClusterConnectionMode.MULTIPLE : ClusterConnectionMode.SINGLE);
+//            bld=bld.requiredClusterType()
+            bld = bld.requiredReplicaSetName(config.getRequiredReplicaSetName());
+            bld = bld.serverSelectionTimeout(config.getServerSelectionTimeout(), TimeUnit.MILLISECONDS);
+//            bld=bld.serverSelector(new ServerSelector() {
+//                @Override
+//                public List<ServerDescription> select(ClusterDescription clusterDescription) {
+//                    return null;
+//                }
+//            })
+
+            ClusterSettings clusterSettings = bld.build();
+            MongoClientSettings.Builder mgSettings = MongoClientSettings.builder().clusterSettings(clusterSettings);
+//            mgSettings.codecRegistry()
+            ConnectionPoolSettings.Builder cpSettings = ConnectionPoolSettings.builder().maintenanceFrequency(config.getMaintenanceFrequency(), TimeUnit.MILLISECONDS);
+            cpSettings = cpSettings.maintenanceInitialDelay(config.getMaintenanceInitialDelay(), TimeUnit.MILLISECONDS);
+            cpSettings = cpSettings.maxConnectionIdleTime(config.getMaxConnectionIdleTime(), TimeUnit.MILLISECONDS);
+            cpSettings = cpSettings.maxConnectionLifeTime(config.getMaxConnectionLifeTime(), TimeUnit.MILLISECONDS);
+            cpSettings = cpSettings.maxWaitQueueSize(config.getMaxWaitQueueSize());
+            cpSettings = cpSettings.maxSize(config.getMaxConnections());
+            cpSettings = cpSettings.maxWaitTime(config.getMaxWaitTime(), TimeUnit.MILLISECONDS);
+            cpSettings = cpSettings.minSize(config.getMinConnectionsPerHost());
+
+
+            mgSettings = mgSettings.connectionPoolSettings(cpSettings.build());
+            SocketSettings.Builder sb = SocketSettings.builder();
+            sb = sb.connectTimeout(config.getHeartbeatConnectTimeout(), TimeUnit.MILLISECONDS);
+            sb = sb.keepAlive(config.isHeartbeatKeepAlive());
+            sb = sb.readTimeout(config.getHearbeatReadTimeout(), TimeUnit.MILLISECONDS);
+            sb = sb.receiveBufferSize(config.getHearbeatReceiveBufferSize());
+            sb = sb.sendBufferSize(config.getHeartbeatSendBufferSize());
+
+            mgSettings = mgSettings.heartbeatSocketSettings(sb.build());
+            mgSettings = mgSettings.readPreference(config.getDefaultReadPreference().getPref());
+
+
+            ServerSettings.Builder ssb = ServerSettings.builder();
+            ssb = ssb.heartbeatFrequency(config.getHeartbeatFrequency(), TimeUnit.MILLISECONDS);
+            ssb = ssb.minHeartbeatFrequency(config.getMinHearbeatFrequency(), TimeUnit.MILLISECONDS);
+
+            mgSettings = mgSettings.serverSettings(ssb.build());
+
+            sb = SocketSettings.builder();
+            sb.connectTimeout(config.getConnectionTimeout(), TimeUnit.MILLISECONDS);
+            sb.keepAlive(config.isSocketKeepAlive());
+            sb.readTimeout(config.getMaxWaitTime(), TimeUnit.MILLISECONDS);
+            sb.receiveBufferSize(config.getReceiveBufferSize());
+            sb.sendBufferSize(config.getSendBufferSize());
+
+            mgSettings.socketSettings(sb.build());
+
+
+            SslSettings.Builder sslb = SslSettings.builder();
+            sslb.enabled(config.isSSLEnabled());
+            sslb.invalidHostNameAllowed(config.isSSLInvalidHostnameAllowed());
+
+
+            mgSettings = mgSettings.sslSettings(sslb.build());
+            mgSettings = mgSettings.writeConcern(new WriteConcern(config.getGlobalW(), config.getWriteTimeout(), config.isGlobalFsync(), config.isGlobalJ()));
+
+//            MongoClientSettings settings = mgSettings.build();
+
+//            MongoClient mongo = MongoClients.create(settings);
+
+//            MongoClientOptions.Builder o = MongoClientOptions.builder();
+//            WriteConcern w = new WriteConcern(config.getGlobalW(), config.getWriteTimeout(), config.isGlobalFsync(), config.isGlobalJ());
+//            o.writeConcern(w);
+//            o.socketTimeout(config.getSocketTimeout());
+//            o.connectTimeout(config.getConnectionTimeout());
+//            o.connectionsPerHost(config.getMaxConnections());
+//            o.socketKeepAlive(config.isSocketKeepAlive());
+//            o.threadsAllowedToBlockForConnectionMultiplier(config.getBlockingThreadsMultiplier());
+//            o.cursorFinalizerEnabled(config.isCursorFinalizerEnabled());
+//            o.alwaysUseMBeans(config.isAlwaysUseMBeans());
+//            o.heartbeatConnectTimeout(config.getHeartbeatConnectTimeout());
+//            o.heartbeatFrequency(config.getHeartbeatFrequency());
+//            o.heartbeatSocketTimeout(config.getHeartbeatSocketTimeout());
+//            o.minConnectionsPerHost(config.getMinConnectionsPerHost());
+//            o.minHeartbeatFrequency(config.getMinHearbeatFrequency());
+//            o.localThreshold(config.getLocalThreashold());
+//            o.maxConnectionIdleTime(config.getMaxConnectionIdleTime());
+//            o.maxConnectionLifeTime(config.getMaxConnectionLifeTime());
+//            o.requiredReplicaSetName(config.getRequiredReplicaSetName());
+//            o.maxWaitTime(config.getMaxWaitTime());
 
             System.getProperties().put("morphium.log.level", "" + config.getLogLevel());
             System.getProperties().put("morphium.log.synced", "" + config.isLogSynced());
@@ -164,28 +244,17 @@ public class Morphium {
                 throw new RuntimeException("Error - no server address specified!");
             }
 
-            MongoClient mongo;
             if (config.getMongoLogin() != null) {
                 MongoCredential cred = MongoCredential.createMongoCRCredential(config.getMongoLogin(), config.getDatabase(), config.getMongoPassword().toCharArray());
                 List<MongoCredential> lst = new ArrayList<>();
                 lst.add(cred);
-                if (config.getAdr().size() == 1) {
-                    mongo = new MongoClient(config.getAdr().get(0), lst, o.build());
-                } else {
-                    mongo = new MongoClient(config.getAdr(), lst, o.build());
-                }
-            } else {
-                if (config.getAdr().size() == 1) {
-                    mongo = new MongoClient(config.getAdr().get(0), o.build());
-                } else {
-                    mongo = new MongoClient(config.getAdr(), o.build());
-                }
-            }
 
-            config.setDb(mongo.getDB(config.getDatabase()));
-            if (config.getDefaultReadPreference() != null) {
-                mongo.setReadPreference(config.getDefaultReadPreference().getPref());
+                mgSettings.credentialList(lst);
             }
+            mongo = MongoClients.create(mgSettings.build());
+
+            config.setDb(mongo.getDatabase(config.getDatabase()));
+
         }
 
         cacheHousekeeper = new CacheHousekeeper(this, 5000, config.getGlobalCacheValidTime());
@@ -287,11 +356,11 @@ public class Morphium {
     }
 
 
-    public Mongo getMongo() {
-        return config.getDb().getMongo();
+    public MongoClient getMongo() {
+        return mongo;
     }
 
-    public DB getDatabase() {
+    public MongoDatabase getDatabase() {
         return config.getDb();
     }
 
@@ -448,6 +517,7 @@ public class Morphium {
     /**
      * converts the given type to capped collection in Mongo, even if no @capped is defined!
      * <b>Warning:</b> depending on size this might take some time!
+     * <b>>Indexes are reased after this, please consider running ensurIndicesFor()</b>
      *
      * @param c
      * @param size
@@ -456,28 +526,57 @@ public class Morphium {
      */
     public <T> void convertToCapped(Class<T> c, int size, AsyncOperationCallback<T> cb) {
         convertToCapped(getMapper().getCollectionName(c), size, cb);
-        //Indexes are not available after converting - recreate them
-        ensureIndicesFor(c, cb);
     }
 
-    public <T> void convertToCapped(String coll, int size, AsyncOperationCallback<T> cb) {
-        BasicDBObject cmd = new BasicDBObject();
-        cmd.put("convertToCapped", coll);
-        cmd.put("size", size);
+    public <T> void convertToCapped(String coll, int size, final AsyncOperationCallback<T> cb) {
+        Document cmd = new Document();
+        cmd.put("convertToCapped", new BsonString(coll));
+        cmd.put("size", new BsonInt32(size));
 //        cmd.put("max", max);
-        getDatabase().command(cmd);
+        final Object waitFor = new Object();
+        final long start = System.currentTimeMillis();
+        getDatabase().runCommand(cmd, new SingleResultCallback<Document>() {
+            @Override
+            public void onResult(Document document, Throwable throwable) {
+                if (cb == null) {
+                    waitFor.notifyAll();
+                } else {
+                    if (throwable == null) {
+                        List<Document> doc = new ArrayList<Document>();
+                        doc.add(document);
+                        cb.onOperationSucceeded(AsyncOperationType.CONVERT_TO_CAPPED, null, System.currentTimeMillis() - start, null, document;
+                    } else {
+                        cb.onOperationError(AsyncOperationType.CONVERT_TO_CAPPED, null, System.currentTimeMillis() - start, throwable.getMessage(), throwable, null, document);
+                    }
+                }
+            }
+        });
+
+        if (cb == null) {
+            try {
+                waitFor.wait();
+            } catch (InterruptedException e) {
+                //TODO: Implement Handling
+                throw new RuntimeException(e);
+            }
+        }
 
     }
 
-    public Map execCommand(String cmd) {
+    public Document execCommand(String cmd) {
         Map<String, Object> map = new HashMap<>();
         map.put(cmd, "1");
         return execCommand(map);
     }
 
-    public Map execCommand(Map<String, Object> command) {
-        BasicDBObject cmd = new BasicDBObject(command);
-        CommandResult r = getDatabase().command(cmd);
+    public Document execCommand(Map<String, Object> command) {
+        Document cmd = new Document(command);
+        getDatabase().runCommand(cmd, new SingleResultCallback<Document>() {
+            @Override
+            public void onResult(Document document, Throwable throwable) {
+
+            }
+        });
         return r.toMap();
     }
 
@@ -506,7 +605,7 @@ public class Morphium {
                         if (!getDatabase().collectionExists(coll)) {
                             if (logger.isDebugEnabled())
                                 logger.debug("Collection does not exist - ensuring indices / capped status");
-                            BasicDBObject cmd = new BasicDBObject();
+                            Document cmd = new Document();
                             cmd.put("create", coll);
                             Capped capped = annotationHelper.getAnnotationFromHierarchy(c, Capped.class);
                             if (capped != null) {
@@ -542,7 +641,7 @@ public class Morphium {
 
     public DBObject simplifyQueryObject(DBObject q) {
         if (q.keySet().size() == 1 && q.get("$and") != null) {
-            BasicDBObject ret = new BasicDBObject();
+            Document ret = new Document();
             BasicDBList lst = (BasicDBList) q.get("$and");
             for (Object o : lst) {
                 if (o instanceof DBObject) {
@@ -926,9 +1025,9 @@ public class Morphium {
             return null;
         }
         DBCollection col = config.getDb().getCollection(collection);
-        BasicDBObject srch = new BasicDBObject("_id", id);
+        Document srch = new Document("_id", id);
         List<Field> lst = annotationHelper.getAllFields(o.getClass());
-        BasicDBObject fields = new BasicDBObject();
+        Document fields = new Document();
         for (Field f : lst) {
             if (f.isAnnotationPresent(WriteOnly.class) || f.isAnnotationPresent(Transient.class)) {
                 continue;
@@ -1382,7 +1481,7 @@ public class Morphium {
     public List<Object> distinct(String key, Class cls) {
         DBCollection collection = config.getDb().getCollection(objectMapper.getCollectionName(cls));
         setReadPreference(collection, cls);
-        return collection.distinct(key, new BasicDBObject());
+        return collection.distinct(key, new Document());
     }
 
     private void setReadPreference(DBCollection c, Class type) {
@@ -1395,8 +1494,8 @@ public class Morphium {
     }
 
     public DBObject group(Query q, Map<String, Object> initial, String jsReduce, String jsFinalize, String... keys) {
-        BasicDBObject k = new BasicDBObject();
-        BasicDBObject ini = new BasicDBObject();
+        Document k = new Document();
+        Document ini = new Document();
         ini.putAll(initial);
         for (String ks : keys) {
             if (ks.startsWith("-")) {
