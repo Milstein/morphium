@@ -151,6 +151,7 @@ public class MorphiumConfig {
     private int sendBufferSize;
     private boolean SSLEnabled;
     private boolean SSLInvalidHostnameAllowed;
+    private long asyncOperationTimeout;
 
     public MorphiumConfig(Properties prop) {
         AnnotationAndReflectionHelper an = new AnnotationAndReflectionHelper(true); //settings always convert camel case
@@ -1216,5 +1217,13 @@ public class MorphiumConfig {
 
     public void setSSLInvalidHostnameAllowed(boolean SSLInvalidHostnameAllowed) {
         this.SSLInvalidHostnameAllowed = SSLInvalidHostnameAllowed;
+    }
+
+    public long getAsyncOperationTimeout() {
+        return asyncOperationTimeout;
+    }
+
+    public void setAsyncOperationTimeout(long asyncOperationTimeout) {
+        this.asyncOperationTimeout = asyncOperationTimeout;
     }
 }

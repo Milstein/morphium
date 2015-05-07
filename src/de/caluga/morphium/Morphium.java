@@ -6,10 +6,7 @@ package de.caluga.morphium;
 
 import com.mongodb.*;
 import com.mongodb.async.SingleResultCallback;
-import com.mongodb.async.client.MongoClient;
-import com.mongodb.async.client.MongoClientSettings;
-import com.mongodb.async.client.MongoClients;
-import com.mongodb.async.client.MongoDatabase;
+import com.mongodb.async.client.*;
 import com.mongodb.connection.*;
 import de.caluga.morphium.aggregation.Aggregator;
 import de.caluga.morphium.annotations.*;
@@ -28,9 +25,7 @@ import de.caluga.morphium.writer.BufferedMorphiumWriterImpl;
 import de.caluga.morphium.writer.MorphiumWriter;
 import de.caluga.morphium.writer.MorphiumWriterImpl;
 import net.sf.cglib.proxy.Enhancer;
-import org.bson.BsonInt32;
-import org.bson.BsonString;
-import org.bson.Document;
+import org.bson.*;
 import org.bson.types.ObjectId;
 
 import java.io.Serializable;
@@ -210,6 +205,7 @@ public class Morphium {
             mgSettings = mgSettings.sslSettings(sslb.build());
             mgSettings = mgSettings.writeConcern(new WriteConcern(config.getGlobalW(), config.getWriteTimeout(), config.isGlobalFsync(), config.isGlobalJ()));
 
+
 //            MongoClientSettings settings = mgSettings.build();
 
 //            MongoClient mongo = MongoClients.create(settings);
@@ -244,13 +240,18 @@ public class Morphium {
                 throw new RuntimeException("Error - no server address specified!");
             }
 
+            List<MongoCredential> lst = new ArrayList<>();
             if (config.getMongoLogin() != null) {
                 MongoCredential cred = MongoCredential.createMongoCRCredential(config.getMongoLogin(), config.getDatabase(), config.getMongoPassword().toCharArray());
-                List<MongoCredential> lst = new ArrayList<>();
                 lst.add(cred);
 
-                mgSettings.credentialList(lst);
             }
+            if (config.getMongoAdminUser() != null) {
+                MongoCredential cred = MongoCredential.createMongoCRCredential(config.getMongoAdminUser(), "admin", config.getMongoAdminPwd().toCharArray());
+                lst.add(cred);
+            }
+            if (lst.size() != 0)
+                mgSettings.credentialList(lst);
             mongo = MongoClients.create(mgSettings.build());
 
             config.setDb(mongo.getDatabase(config.getDatabase()));
@@ -538,16 +539,16 @@ public class Morphium {
         getDatabase().runCommand(cmd, new SingleResultCallback<Document>() {
             @Override
             public void onResult(Document document, Throwable throwable) {
-                if (cb == null) {
-                    waitFor.notifyAll();
-                } else {
+                try {
                     if (throwable == null) {
                         List<Document> doc = new ArrayList<Document>();
                         doc.add(document);
-                        cb.onOperationSucceeded(AsyncOperationType.CONVERT_TO_CAPPED, null, System.currentTimeMillis() - start, null, document;
+                        cb.onOperationSucceeded(AsyncOperationType.CONVERT_TO_CAPPED, null, System.currentTimeMillis() - start, null, null, document);
                     } else {
                         cb.onOperationError(AsyncOperationType.CONVERT_TO_CAPPED, null, System.currentTimeMillis() - start, throwable.getMessage(), throwable, null, document);
                     }
+                } finally {
+                    waitFor.notifyAll();
                 }
             }
         });
@@ -571,13 +572,21 @@ public class Morphium {
 
     public Document execCommand(Map<String, Object> command) {
         Document cmd = new Document(command);
+        final Document result = new Document();
         getDatabase().runCommand(cmd, new SingleResultCallback<Document>() {
             @Override
             public void onResult(Document document, Throwable throwable) {
-
+                result.putAll(document);
+                result.notifyAll();
             }
         });
-        return r.toMap();
+
+        try {
+            result.wait(config.getAsyncOperationTimeout());
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        return result;
     }
 
     /**
@@ -594,58 +603,86 @@ public class Morphium {
         Runnable r = new Runnable() {
             @Override
             public void run() {
-                WriteConcern wc = getWriteConcernForClass(c);
-                String coll = getMapper().getCollectionName(c);
-                DBCollection collection = null;
 
-                for (int i = 0; i < getConfig().getRetriesOnNetworkError(); i++) {
-                    try {
-                        collection = getDatabase().getCollection(coll);
-                        if (collection.isCapped()) return;
-                        if (!getDatabase().collectionExists(coll)) {
-                            if (logger.isDebugEnabled())
-                                logger.debug("Collection does not exist - ensuring indices / capped status");
-                            Document cmd = new Document();
-                            cmd.put("create", coll);
-                            Capped capped = annotationHelper.getAnnotationFromHierarchy(c, Capped.class);
-                            if (capped != null) {
-                                cmd.put("capped", true);
-                                cmd.put("size", capped.maxSize());
-                                cmd.put("max", capped.maxEntries());
-                            }
-                            cmd.put("autoIndexId", (annotationHelper.getIdField(c).getType().equals(ObjectId.class)));
-                            getDatabase().command(cmd);
-                        } else {
-                            Capped capped = annotationHelper.getAnnotationFromHierarchy(c, Capped.class);
-                            if (capped != null) {
+//                        if (collection.isCapped()) return; //TODO: find out how to do that with mongo driver 3.0
 
-                                convertToCapped(c, capped.maxSize(), null);
+                final Object monitor = new Object();
+                final long start = System.currentTimeMillis();
+                final BsonDocument cmd = new BsonDocument("collMod", new BsonString(getMapper().getCollectionName(c)));
+                final SingleResultCallback<Document> srcb = new SingleResultCallback<Document>() {
+                    private int i = 0;
+
+                    @Override
+                    public void onResult(Document result, Throwable t) {
+                        try {
+                            i++;
+                            if (t != null) {
+                                handleNetworkError(i, t);
+                                try {
+                                    Thread.sleep(config.getSleepBetweenNetworkErrorRetries());
+                                } catch (InterruptedException e) {
+                                }
                             }
+                            if (result.get("ok").equals(new BsonInt32(1))) {
+                                //exists
+                                Capped capped = annotationHelper.getAnnotationFromHierarchy(c, Capped.class);
+                                if (capped != null) {
+
+                                    convertToCapped(c, capped.maxSize(), null);
+                                }
+                            } else {
+                                WriteConcern wc = getWriteConcernForClass(c);
+                                String coll = getMapper().getCollectionName(c);
+                                if (logger.isDebugEnabled())
+                                    logger.debug("Collection does not exist - ensuring indices / capped status");
+                                Document cmd = new Document();
+                                cmd.put("create", coll);
+                                Capped capped = annotationHelper.getAnnotationFromHierarchy(c, Capped.class);
+                                if (capped != null) {
+                                    cmd.put("capped", true);
+                                    cmd.put("size", capped.maxSize());
+                                    cmd.put("max", capped.maxEntries());
+                                }
+                                cmd.put("autoIndexId", (annotationHelper.getIdField(c).getType().equals(ObjectId.class)));
+                                getDatabase().runCommand(cmd, new SingleResultCallback<Document>() {
+                                    @Override
+                                    public void onResult(Document result, Throwable t) {
+                                        if (callback != null) {
+                                            List r = new ArrayList();
+                                            r.add(result);
+                                            callback.onOperationSucceeded(AsyncOperationType.CONVERT_TO_CAPPED, null, System.currentTimeMillis() - start, r, null, c);
+                                        }
+                                    }
+                                });
+                            }
+                        } finally {
+                            monitor.notifyAll();
                         }
-                        break;
-                    } catch (Throwable t) {
-                        handleNetworkError(i, t);
+
                     }
-                }
+                };
+                getDatabase().runCommand(cmd, srcb);
+
             }
         };
 
         if (callback == null) {
-            r.run();
-        } else {
-            asyncOperationsThreadPool.execute(r);
-//            new Thread(r).start();
+            try {
+                rsMonitor.wait(config.getAsyncOperationTimeout());
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
         }
     }
 
 
-    public DBObject simplifyQueryObject(DBObject q) {
+    public Document simplifyQueryObject(Document q) {
         if (q.keySet().size() == 1 && q.get("$and") != null) {
             Document ret = new Document();
-            BasicDBList lst = (BasicDBList) q.get("$and");
+            BsonArray lst = (BsonArray) q.get("$and");
             for (Object o : lst) {
-                if (o instanceof DBObject) {
-                    ret.putAll(((DBObject) o));
+                if (o instanceof Document) {
+                    ret.putAll(((Document) o));
                 } else if (o instanceof Map) {
                     ret.putAll(((Map) o));
                 } else {
@@ -964,7 +1001,7 @@ public class Morphium {
 
     @SuppressWarnings({"unchecked", "UnusedDeclaration"})
     public String toJsonString(Object o) {
-        DBObject db = objectMapper.marshall(o);
+        Document db = objectMapper.marshall(o);
         if (db.get("_id") != null)
             db.put("_id", db.get("_id").toString());
         return db.toString();
@@ -1018,13 +1055,13 @@ public class Morphium {
         return reread(o, objectMapper.getCollectionName(o.getClass()));
     }
 
-    public <T> T reread(T o, String collection) {
+    public <T> T reread(final T o, String collection) {
         if (o == null) return null;
         Object id = getId(o);
         if (id == null) {
             return null;
         }
-        DBCollection col = config.getDb().getCollection(collection);
+        MongoCollection col = config.getDb().getCollection(collection);
         Document srch = new Document("_id", id);
         List<Field> lst = annotationHelper.getAllFields(o.getClass());
         Document fields = new Document();
@@ -1036,27 +1073,38 @@ public class Morphium {
             fields.put(n, 1);
         }
 
-        DBCursor crs = col.find(srch, fields).limit(1);
-        if (crs.hasNext()) {
-            DBObject dbo = crs.next();
-            Object fromDb = objectMapper.unmarshall(o.getClass(), dbo);
-            if (fromDb == null) throw new RuntimeException("could not reread from db");
-            List<String> flds = annotationHelper.getFields(o.getClass());
-            for (String f : flds) {
-                Field fld = annotationHelper.getField(o.getClass(), f);
-                if (java.lang.reflect.Modifier.isStatic(fld.getModifiers())) {
-                    continue;
-                }
+        FindIterable crs = col.find(srch).limit(1);
+        final Object m = new Object();
+        crs.first(new SingleResultCallback() {
+            @Override
+            public void onResult(Object result, Throwable t) {
                 try {
-                    fld.set(o, fld.get(fromDb));
-                } catch (IllegalAccessException e) {
-                    logger.error("Could not set Value: " + fld);
+                    Document dbo = (Document) result;
+                    Object fromDb = objectMapper.unmarshall(o.getClass(), dbo);
+                    if (fromDb == null) throw new RuntimeException("could not reread from db");
+                    List<String> flds = annotationHelper.getFields(o.getClass());
+                    for (String f : flds) {
+                        Field fld = annotationHelper.getField(o.getClass(), f);
+                        if (java.lang.reflect.Modifier.isStatic(fld.getModifiers())) {
+                            continue;
+                        }
+                        try {
+                            fld.set(o, fld.get(fromDb));
+                        } catch (IllegalAccessException e) {
+                            logger.error("Could not set Value: " + fld);
+                        }
+                    }
+
+                    firePostLoadEvent(o);
+                } finally {
+                    m.notifyAll();
                 }
             }
-            firePostLoadEvent(o);
-        } else {
-//            logger.info("Did not find object with id " + id);
-            return null;
+        });
+        try {
+            m.wait(config.getAsyncOperationTimeout());
+        } catch (InterruptedException e) {
+            e.printStackTrace();
         }
         return o;
     }
@@ -1464,36 +1512,55 @@ public class Morphium {
      * returns a distinct list of values of the given collection
      * Attention: these values are not unmarshalled, you might get MongoDBObjects
      */
-    public List<Object> distinct(Enum key, Query q) {
-        return distinct(key.name(), q);
-    }
+//    public List<Object> distinct(Enum key, Query q) {
+//        return distinct(key.name(), q);
+//    }
 
     /**
      * returns a distinct list of values of the given collection
      * Attention: these values are not unmarshalled, you might get MongoDBObjects
      */
-    @SuppressWarnings("unchecked")
-    public List<Object> distinct(String key, Query q) {
-        return config.getDb().getCollection(objectMapper.getCollectionName(q.getType())).distinct(key, q.toQueryObject());
-    }
-
+//    @SuppressWarnings("unchecked")
+//    public List<Object> distinct(String key, Query q) {
+//        return config.getDb().getCollection(objectMapper.getCollectionName(q.getType())).distinct(key, q.toQueryObject());
+//    }
     @SuppressWarnings("unchecked")
     public List<Object> distinct(String key, Class cls) {
-        DBCollection collection = config.getDb().getCollection(objectMapper.getCollectionName(cls));
-        setReadPreference(collection, cls);
-        return collection.distinct(key, new Document());
+        MongoCollection collection = config.getDb().getCollection(objectMapper.getCollectionName(cls));
+        collection = setReadPreference(collection, cls);
+        DistinctIterable it = collection.distinct(key, Document.class);
+        final List ret = new ArrayList<Object>();
+        it.forEach(new Block() {
+            @Override
+            public void apply(Object o) {
+                ret.add(o);
+            }
+        }, new SingleResultCallback<Void>() {
+            @Override
+            public void onResult(Void result, Throwable t) {
+                ret.notifyAll();
+            }
+        });
+
+        try {
+            ret.wait(config.getAsyncOperationTimeout());
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        }
+        return ret;
+
     }
 
-    private void setReadPreference(DBCollection c, Class type) {
+    private MongoCollection setReadPreference(MongoCollection c, Class type) {
         DefaultReadPreference pr = annotationHelper.getAnnotationFromHierarchy(type, DefaultReadPreference.class);
         if (pr != null) {
-            c.setReadPreference(pr.value().getPref());
-        } else {
-            c.setReadPreference(null);
+            return c.withReadPreference(pr.value().getPref());
+
         }
+        return c;
     }
 
-    public DBObject group(Query q, Map<String, Object> initial, String jsReduce, String jsFinalize, String... keys) {
+    public Object group(Query q, Map<String, Object> initial, String jsReduce, String jsFinalize, String... keys) {
         Document k = new Document();
         Document ini = new Document();
         ini.putAll(initial);
@@ -1515,9 +1582,13 @@ public class Morphium {
         if (!jsFinalize.trim().startsWith("function(")) {
             jsFinalize = "function (data) {" + jsFinalize + "}";
         }
-        GroupCommand cmd = new GroupCommand(config.getDb().getCollection(objectMapper.getCollectionName(q.getType())),
-                k, q.toQueryObject(), ini, jsReduce, jsFinalize);
-        return config.getDb().getCollection(objectMapper.getCollectionName(q.getType())).group(cmd);
+
+        throw new RuntimeException("Mongodb Driver 3.0 does not support grouping yet");
+//
+//        MongoCollection<Document> collection = config.getDb().getCollection(objectMapper.getCollectionName(q.getType()));
+//        GroupCommand cmd = new GroupCommand(collection,
+//                k, q.toQueryObject(), ini, jsReduce, jsFinalize);
+//        return ((MongoCollection<Document>) collection).group(cmd);
     }
 
     @SuppressWarnings("unchecked")
@@ -1787,25 +1858,25 @@ public class Morphium {
 
 
     public void readMaximums() {
-        try {
-            DB adminDB = getMongo().getDB("admin");
-            MorphiumConfig config = getConfig();
-            if (config.getMongoAdminUser() != null) {
-                if (!adminDB.authenticate(config.getMongoAdminUser(), config.getMongoAdminPwd().toCharArray())) {
-                    logger.error("Authentication as admin failed!");
-                    return;
+        MongoDatabase adminDB = getMongo().getDatabase("admin");
+
+        adminDB.runCommand(new BsonDocument("isMaster", new BsonString("1")), new SingleResultCallback<Document>() {
+                    @Override
+                    public void onResult(Document result, Throwable t) {
+                        if (t != null) {
+                            logger.error("Error reading max avalues from DB", t);
+                            maxBsonSize = 0;
+                            maxMessageSize = 0;
+                            maxWriteBatchSize = 0;
+                        } else {
+                            maxBsonSize = (Integer) result.get("maxBsonObjectSize");
+                            maxMessageSize = (Integer) result.get("maxMessageSizeBytes");
+                            maxWriteBatchSize = (Integer) result.get("maxWriteBatchSize");
+                        }
+                    }
                 }
-            }
-            CommandResult res = adminDB.command("isMaster");
-            maxBsonSize = (Integer) res.get("maxBsonObjectSize");
-            maxMessageSize = (Integer) res.get("maxMessageSizeBytes");
-            maxWriteBatchSize = (Integer) res.get("maxWriteBatchSize");
-        } catch (Exception e) {
-            logger.error("Error reading max avalues from DB", e);
-            maxBsonSize = 0;
-            maxMessageSize = 0;
-            maxWriteBatchSize = 0;
-        }
+        );
+
     }
 
     /**
@@ -1931,7 +2002,7 @@ public class Morphium {
         if (cacheHousekeeper.isAlive()) {
             cacheHousekeeper.interrupt();
         }
-        config.getDb().getMongo().close();
+        mongo.close();
         config = null;
 //        MorphiumSingleton.reset();
     }
@@ -1952,7 +2023,7 @@ public class Morphium {
     }
 
     public <T, R> List<R> aggregate(Aggregator<T, R> a) {
-        DBCollection coll = null;
+        MongoCollection coll = null;
         for (int i = 0; i < getConfig().getRetriesOnNetworkError(); i++) {
             try {
                 coll = config.getDb().getCollection(objectMapper.getCollectionName(a.getSearchType()));
@@ -1961,7 +2032,7 @@ public class Morphium {
                 handleNetworkError(i, e);
             }
         }
-        List<DBObject> agList = a.toAggregationList();
+        List<Document> agList = a.toAggregationList();
         DBObject first = agList.get(0);
         agList.remove(0);
         AggregationOutput resp = null;
