@@ -2022,7 +2022,7 @@ public class Morphium {
         return aggregator;
     }
 
-    public <T, R> List<R> aggregate(Aggregator<T, R> a) {
+    public <T, R> List<R> aggregate(final Aggregator<T, R> a) {
         MongoCollection coll = null;
         for (int i = 0; i < getConfig().getRetriesOnNetworkError(); i++) {
             try {
@@ -2033,23 +2033,39 @@ public class Morphium {
             }
         }
         List<Document> agList = a.toAggregationList();
-        DBObject first = agList.get(0);
+//        Document first = agList.get(0);
         agList.remove(0);
-        AggregationOutput resp = null;
+        AggregateIterable resp = null;
         for (int i = 0; i < getConfig().getRetriesOnNetworkError(); i++) {
             try {
-                resp = coll.aggregate(first, agList.toArray(new DBObject[agList.size()]));
+                resp = coll.aggregate(agList);
                 break;
             } catch (Throwable t) {
                 handleNetworkError(i, t);
             }
         }
 
-        List<R> ret = new ArrayList<R>();
-        for (DBObject o : resp.results()) {
-            R obj = getMapper().unmarshall(a.getResultType(), o);
-            if (obj == null) continue;
-            ret.add(obj);
+        final List<R> ret = new ArrayList<R>();
+        if (resp != null) resp.forEach(new Block() {
+                                           @Override
+                                           public void apply(Object o) {
+                                               R obj = getMapper().unmarshall(a.getResultType(), (Document) o);
+                                               if (obj == null) return;
+                                               ret.add(obj);
+                                           }
+                                       },
+                new SingleResultCallback<Void>() {
+                    @Override
+                    public void onResult(Void result, Throwable t) {
+                        ret.notifyAll();
+                    }
+                });
+
+
+        try {
+            ret.wait(config.getAsyncOperationTimeout());
+        } catch (InterruptedException e) {
+            e.printStackTrace();
         }
         return ret;
     }

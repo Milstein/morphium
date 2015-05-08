@@ -1,10 +1,9 @@
 package de.caluga.morphium.aggregation;
 
-import com.mongodb.BasicDBObject;
-import com.mongodb.DBObject;
 import de.caluga.morphium.Morphium;
 import de.caluga.morphium.async.AsyncOperationCallback;
 import de.caluga.morphium.query.Query;
+import org.bson.Document;
 
 import java.util.List;
 import java.util.Map;
@@ -43,7 +42,7 @@ public interface Aggregator<T, R> {
 
     public Aggregator<T, R> project(String... m);    //field:1
 
-    public Aggregator<T, R> project(BasicDBObject m);    //custom
+    public Aggregator<T, R> project(Document m);    //custom
 
     public Aggregator<T, R> match(Query<T> q);
 
@@ -57,15 +56,15 @@ public interface Aggregator<T, R> {
 
     public Aggregator<T, R> sort(Map<String, Integer> sort);
 
-    public Group<T, R> group(BasicDBObject id);
+    public Group<T, R> group(Document id);
 
     public Group<T, R> group(Map<String, String> idSubObject);
 
     public Group<T, R> group(String id);
 
-    public List<DBObject> toAggregationList();
+    public List<Document> toAggregationList();
 
-    public void addOperator(DBObject o);
+    public void addOperator(Document o);
 
     public List<R> aggregate();
 
