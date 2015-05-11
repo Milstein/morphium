@@ -1,11 +1,11 @@
 package de.caluga.morphium.query;
 
-import com.mongodb.DBObject;
 import com.mongodb.ServerAddress;
 import de.caluga.morphium.FilterExpression;
 import de.caluga.morphium.Morphium;
 import de.caluga.morphium.annotations.ReadPreferenceLevel;
 import de.caluga.morphium.async.AsyncOperationCallback;
+import org.bson.Document;
 
 import java.util.List;
 import java.util.Map;
@@ -136,7 +136,7 @@ public interface Query<T> extends Cloneable {
      *
      * @return query object
      */
-    public DBObject toQueryObject();
+    public Document toQueryObject();
 
     /**
      * what type this query is for
@@ -210,7 +210,7 @@ public interface Query<T> extends Cloneable {
      */
     public Query<T> q();
 
-    public List<T> complexQuery(DBObject query);
+    public List<T> complexQuery(Document query);
 
     /**
      * just sends the given query to the MongoDBDriver and masrhalls objects as listed
@@ -221,9 +221,9 @@ public interface Query<T> extends Cloneable {
      * @param limit - maximium number of results
      * @return list of objects matching query
      */
-    public List<T> complexQuery(DBObject query, Map<String, Integer> sort, int skip, int limit);
+    public List<T> complexQuery(Document query, Map<String, Integer> sort, int skip, int limit);
 
-    public List<T> complexQuery(DBObject query, String sort, int skip, int limit);
+    public List<T> complexQuery(Document query, String sort, int skip, int limit);
 
     /**
      * same as copmplexQuery(query,0,1).get(0);
@@ -231,11 +231,11 @@ public interface Query<T> extends Cloneable {
      * @param query - query
      * @return type
      */
-    public T complexQueryOne(DBObject query);
+    public T complexQueryOne(Document query);
 
-    public T complexQueryOne(DBObject query, Map<String, Integer> sort, int skip);
+    public T complexQueryOne(Document query, Map<String, Integer> sort, int skip);
 
-    public T complexQueryOne(DBObject query, Map<String, Integer> sort);
+    public T complexQueryOne(Document query, Map<String, Integer> sort);
 
     public int getLimit();
 

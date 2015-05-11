@@ -1,7 +1,7 @@
 package de.caluga.morphium;
 
-import com.mongodb.BasicDBObject;
-import com.mongodb.DBObject;
+
+import org.bson.Document;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -42,10 +42,10 @@ public class FilterExpression {
         children.add(e);
     }
 
-    public DBObject dbObject() {
-        DBObject o = new BasicDBObject();
+    public Document dbObject() {
+        Document o = new Document();
         if (children != null) {
-            DBObject expression = new BasicDBObject();
+            Document expression = new Document();
             for (FilterExpression flt : children) {
                 expression.put(flt.getField(), flt.getValue());
             }
