@@ -15,7 +15,7 @@ import java.util.Map;
  */
 public interface MorphiumStorageListener<T> {
     public enum UpdateTypes {
-        SET, UNSET, PUSH, PULL, INC, DEC, MUL, MIN, MAX, RENAME, POP,
+        SET, UNSET, PUSH, PULL, INC, DEC, MUL, MIN, MAX, RENAME, POP, INSERT,
     }
 
     public void preStore(Morphium m, T r, boolean isNew) throws MorphiumAccessVetoException;

@@ -51,7 +51,7 @@ public class BulkRequestWrapper {
 
     public void insert(Object t) {
         model = new InsertOneModel(morphium.getMapper().marshall(t));
-        updateType = null;
+        updateType = MorphiumStorageListener.UpdateTypes.INSERT;
     }
 
     public void removeOne() {

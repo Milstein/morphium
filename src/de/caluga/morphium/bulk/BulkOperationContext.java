@@ -5,8 +5,8 @@ import com.mongodb.bulk.BulkWriteResult;
 import com.mongodb.bulk.BulkWriteUpsert;
 import com.mongodb.client.model.BulkWriteOptions;
 import de.caluga.morphium.Morphium;
-import de.caluga.morphium.WriteAccessType;
 import de.caluga.morphium.async.AsyncOperationCallback;
+import de.caluga.morphium.async.AsyncOperationType;
 import de.caluga.morphium.query.Query;
 
 import java.util.ArrayList;
@@ -65,79 +65,49 @@ public class BulkOperationContext {
         return w;
     }
 
-    public BulkWriteResult execute(AsyncOperationCallback cb) {
+    public BulkWriteResult execute(final AsyncOperationCallback cb) {
         BulkWriteOptions opt = new BulkWriteOptions();
         opt.ordered(ordered);
 
-        final MorphiumBulkWriteResult result = new MorphiumBulkWriteResult();
-
-        for (Map.Entry<String, List<BulkRequestWrapper>> entry : requestsByCollection.entrySet()) {
+        final MorphiumBulkWriteResult ret = new MorphiumBulkWriteResult();
+        final long start = System.currentTimeMillis();
+        for (final Map.Entry<String, List<BulkRequestWrapper>> entry : requestsByCollection.entrySet()) {
             morphium.getDatabase().getCollection(entry.getKey()).bulkWrite((List) entry.getValue(), opt, new SingleResultCallback<BulkWriteResult>() {
                 @Override
-                public void onResult(BulkWriteResult result, Throwable t) {
 
+                public void onResult(BulkWriteResult result, Throwable t) {
+                    try {
+                        for (BulkRequestWrapper w : entry.getValue()) {
+                            w.preExec();
+                        }
+                        if (cb != null) {
+                            if (t == null) {
+                                cb.onOperationSucceeded(AsyncOperationType.BULK, null, System.currentTimeMillis() - start, null, entry.getKey(), null, null, result, entry.getValue());
+                            } else {
+                                cb.onOperationError(AsyncOperationType.BULK, null, System.currentTimeMillis() - start, null, entry.getKey(), t.getMessage(), t, null, result, entry.getValue());
+                            }
+                        } else {
+                            ret.addResults(result);
+                        }
+                        for (BulkRequestWrapper w : entry.getValue()) {
+                            w.postExec();
+                        }
+                    } finally {
+                        result.notifyAll();
+                    }
                 }
             });
         }
 
-//        List<? extends WriteModel<? extends Document>> bulk = null;
-//
-//        morphium.getDatabase().getCollection(morphium.getMapper().getCollectionName(o.getClass())).bulkWrite(bulk, opts, new SingleResultCallback<BulkWriteResult>() {
-//            @Override
-//            public void onResult(BulkWriteResult result, Throwable t) {
-//
-//            }
-//        });
-//        bulk.insert(morphium.getMapper().marshall(o));
-//        if (bulk == null) return new BulkWriteResult() {
-//            @Override
-//            public boolean isAcknowledged() {
-//                return false;
-//            }
-//
-//            @Override
-//            public int getInsertedCount() {
-//                return 0;
-//            }
-//
-//            @Override
-//            public int getMatchedCount() {
-//                return 0;
-//            }
-//
-//            @Override
-//            public int getRemovedCount() {
-//                return 0;
-//            }
-//
-//            @Override
-//            public boolean isModifiedCountAvailable() {
-//                return false;
-//            }
-//
-//            @Override
-//            public int getModifiedCount() {
-//                return 0;
-//            }
-//
-//            @Override
-//            public List<BulkWriteUpsert> getUpserts() {
-//                return null;
-//            }
-//        };
-//        for (BulkRequestWrapper w : requestsByCollection) {
-//            w.preExec();
-//        }
-        long dur = System.currentTimeMillis();
-        BulkWriteResult res = bulk.execute();
-        dur = System.currentTimeMillis() - dur;
-        for (BulkRequestWrapper w : requestsByCollection) {
-            w.postExec();
+        if (cb != null) {
+            try {
+                ret.wait(morphium.getConfig().getAsyncOperationTimeout());
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            return ret;
         }
-        for (BulkRequestWrapper w : requestsByCollection) {
-            morphium.fireProfilingWriteEvent(w.getQuery().getType(), this, dur, false, WriteAccessType.BULK_UPDATE);
-        }
-        return res;
+        return null;
     }
 
     private class MorphiumBulkWriteResult extends BulkWriteResult {
