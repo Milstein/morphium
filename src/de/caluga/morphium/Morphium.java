@@ -4,7 +4,9 @@
  */
 package de.caluga.morphium;
 
-import com.mongodb.*;
+import com.mongodb.Block;
+import com.mongodb.MongoCredential;
+import com.mongodb.WriteConcern;
 import com.mongodb.async.SingleResultCallback;
 import com.mongodb.async.client.*;
 import com.mongodb.connection.*;
@@ -615,14 +617,6 @@ public class Morphium {
                     @Override
                     public void onResult(Document result, Throwable t) {
                         try {
-                            i++;
-                            if (t != null) {
-                                handleNetworkError(i, t);
-                                try {
-                                    Thread.sleep(config.getSleepBetweenNetworkErrorRetries());
-                                } catch (InterruptedException e) {
-                                }
-                            }
                             if (result.get("ok").equals(new BsonInt32(1))) {
                                 //exists
                                 Capped capped = annotationHelper.getAnnotationFromHierarchy(c, Capped.class);
@@ -1299,40 +1293,40 @@ public class Morphium {
     }
 
 
-    public void handleNetworkError(int i, Throwable e) {
-        logger.info("Handling network error..." + e.getClass().getName());
-        if (e.getClass().getName().equals("javax.validation.ConstraintViolationException")) {
-            throw ((RuntimeException) e);
-        }
-        if (e instanceof DuplicateKeyException) {
-            throw new RuntimeException(e);
-        }
-        if (e.getMessage().equals("can't find a master")
-                || e.getMessage().startsWith("No replica set members available in")
-                || e.getMessage().equals("not talking to master and retries used up")
-                || (e instanceof WriteConcernException && e.getMessage().contains("not master"))
-                || e instanceof MongoException) {
-            if (i + 1 < getConfig().getRetriesOnNetworkError()) {
-                logger.warn("Retry because of network error: " + e.getMessage());
-                try {
-                    Thread.sleep(getConfig().getSleepBetweenNetworkErrorRetries());
-                } catch (InterruptedException e1) {
-                }
-
-            } else {
-                logger.info("no retries left - re-throwing exception");
-                if (e instanceof RuntimeException) {
-                    throw ((RuntimeException) e);
-                }
-                throw (new RuntimeException(e));
-            }
-        } else {
-            if (e instanceof RuntimeException) {
-                throw ((RuntimeException) e);
-            }
-            throw (new RuntimeException(e));
-        }
-    }
+//    public void handleNetworkError(int i, Throwable e) {
+//        logger.info("Handling network error..." + e.getClass().getName());
+//        if (e.getClass().getName().equals("javax.validation.ConstraintViolationException")) {
+//            throw ((RuntimeException) e);
+//        }
+//        if (e instanceof DuplicateKeyException) {
+//            throw new RuntimeException(e);
+//        }
+//        if (e.getMessage().equals("can't find a master")
+//                || e.getMessage().startsWith("No replica set members available in")
+//                || e.getMessage().equals("not talking to master and retries used up")
+//                || (e instanceof WriteConcernException && e.getMessage().contains("not master"))
+//                || e instanceof MongoException) {
+//            if (i + 1 < getConfig().getRetriesOnNetworkError()) {
+//                logger.warn("Retry because of network error: " + e.getMessage());
+//                try {
+//                    Thread.sleep(getConfig().getSleepBetweenNetworkErrorRetries());
+//                } catch (InterruptedException e1) {
+//                }
+//
+//            } else {
+//                logger.info("no retries left - re-throwing exception");
+//                if (e instanceof RuntimeException) {
+//                    throw ((RuntimeException) e);
+//                }
+//                throw (new RuntimeException(e));
+//            }
+//        } else {
+//            if (e instanceof RuntimeException) {
+//                throw ((RuntimeException) e);
+//            }
+//            throw (new RuntimeException(e));
+//        }
+//    }
 
     @SuppressWarnings("ConstantConditions")
     public WriteConcern getWriteConcernForClass(Class<?> cls) {
@@ -2024,26 +2018,12 @@ public class Morphium {
 
     public <T, R> List<R> aggregate(final Aggregator<T, R> a) {
         MongoCollection coll = null;
-        for (int i = 0; i < getConfig().getRetriesOnNetworkError(); i++) {
-            try {
                 coll = config.getDb().getCollection(objectMapper.getCollectionName(a.getSearchType()));
-                break;
-            } catch (Throwable e) {
-                handleNetworkError(i, e);
-            }
-        }
         List<Document> agList = a.toAggregationList();
 //        Document first = agList.get(0);
         agList.remove(0);
         AggregateIterable resp = null;
-        for (int i = 0; i < getConfig().getRetriesOnNetworkError(); i++) {
-            try {
                 resp = coll.aggregate(agList);
-                break;
-            } catch (Throwable t) {
-                handleNetworkError(i, t);
-            }
-        }
 
         final List<R> ret = new ArrayList<R>();
         if (resp != null) resp.forEach(new Block() {
