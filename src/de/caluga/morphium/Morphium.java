@@ -529,7 +529,7 @@ public class Morphium {
         convertToCapped(getMapper().getCollectionName(c), size, cb);
     }
 
-    public <T> void convertToCapped(String coll, int size, final AsyncOperationCallback<T> cb) {
+    public <T> void convertToCapped(final String coll, int size, final AsyncOperationCallback<T> cb) {
         Document cmd = new Document();
         cmd.put("convertToCapped", new BsonString(coll));
         cmd.put("size", new BsonInt32(size));
@@ -543,9 +543,9 @@ public class Morphium {
                     if (throwable == null) {
                         List<Document> doc = new ArrayList<Document>();
                         doc.add(document);
-                        cb.onOperationSucceeded(AsyncOperationType.CONVERT_TO_CAPPED, null, System.currentTimeMillis() - start, null, null, document);
+                        cb.onOperationSucceeded(AsyncOperationType.CONVERT_TO_CAPPED, null, System.currentTimeMillis() - start, null, coll, null, null, document);
                     } else {
-                        cb.onOperationError(AsyncOperationType.CONVERT_TO_CAPPED, null, System.currentTimeMillis() - start, throwable.getMessage(), throwable, null, document);
+                        cb.onOperationError(AsyncOperationType.CONVERT_TO_CAPPED, null, System.currentTimeMillis() - start, null, coll, throwable.getMessage(), throwable, null, document);
                     }
                 } finally {
                     waitFor.notifyAll();
@@ -632,7 +632,7 @@ public class Morphium {
                                 }
                             } else {
                                 WriteConcern wc = getWriteConcernForClass(c);
-                                String coll = getMapper().getCollectionName(c);
+                                final String coll = getMapper().getCollectionName(c);
                                 if (logger.isDebugEnabled())
                                     logger.debug("Collection does not exist - ensuring indices / capped status");
                                 Document cmd = new Document();
@@ -650,7 +650,7 @@ public class Morphium {
                                         if (callback != null) {
                                             List r = new ArrayList();
                                             r.add(result);
-                                            callback.onOperationSucceeded(AsyncOperationType.CONVERT_TO_CAPPED, null, System.currentTimeMillis() - start, r, null, c);
+                                            callback.onOperationSucceeded(AsyncOperationType.CONVERT_TO_CAPPED, null, System.currentTimeMillis() - start, c, coll, r, null, c);
                                         }
                                     }
                                 });

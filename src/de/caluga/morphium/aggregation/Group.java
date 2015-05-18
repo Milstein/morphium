@@ -1,7 +1,6 @@
 package de.caluga.morphium.aggregation;
 
-import com.mongodb.BasicDBObject;
-import com.mongodb.DBObject;
+import org.bson.Document;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -17,63 +16,63 @@ import java.util.Map;
 @SuppressWarnings("UnusedDeclaration")
 public class Group<T, R> {
     private Aggregator<T, R> aggregator;
-    private BasicDBObject id;
+    private Document id;
 
-    private List<BasicDBObject> operators = new ArrayList<BasicDBObject>();
+    private List<Document> operators = new ArrayList<Document>();
 
-    public Group(Aggregator<T, R> ag, Map<String, String> idSubObject) {
+    public Group(Aggregator<T, R> ag, Map<String, Object> idSubObject) {
         aggregator = ag;
-        id = new BasicDBObject("_id", new BasicDBObject(idSubObject));
+        id = new Document("_id", new Document(idSubObject));
     }
 
     public Group(Aggregator<T, R> ag, String id) {
         aggregator = ag;
-        this.id = new BasicDBObject("_id", id);
+        this.id = new Document("_id", id);
     }
 
-    public Group(Aggregator<T, R> ag, BasicDBObject id) {
+    public Group(Aggregator<T, R> ag, Document id) {
         aggregator = ag;
-        this.id = new BasicDBObject("_id", new BasicDBObject(id));
+        this.id = new Document("_id", new Document(id));
     }
 
-    public Group<T, R> addToSet(BasicDBObject param) {
-        BasicDBObject o = new BasicDBObject("$addToSet", param);
+    public Group<T, R> addToSet(Document param) {
+        Document o = new Document("$addToSet", param);
         operators.add(o);
         return this;
     } //don't know what this actually should do???
 
     public Group<T, R> first(String name, Object p) {
-        BasicDBObject o = new BasicDBObject(name, new BasicDBObject("$first", p));
+        Document o = new Document(name, new Document("$first", p));
         operators.add(o);
         return this;
     }
 
     public Group<T, R> last(String name, Object p) {
-        BasicDBObject o = new BasicDBObject(name, new BasicDBObject("$last", p));
+        Document o = new Document(name, new Document("$last", p));
         operators.add(o);
         return this;
     }
 
     public Group<T, R> max(String name, Object p) {
-        BasicDBObject o = new BasicDBObject(name, new BasicDBObject("$max", p));
+        Document o = new Document(name, new Document("$max", p));
         operators.add(o);
         return this;
     }
 
     public Group<T, R> min(String name, Object p) {
-        BasicDBObject o = new BasicDBObject(name, new BasicDBObject("$min", p));
+        Document o = new Document(name, new Document("$min", p));
         operators.add(o);
         return this;
     }
 
     public Group<T, R> avg(String name, Object p) {
-        BasicDBObject o = new BasicDBObject(name, new BasicDBObject("$avg", p));
+        Document o = new Document(name, new Document("$avg", p));
         operators.add(o);
         return this;
     }
 
     public Group<T, R> push(String name, Object p) {
-        BasicDBObject o = new BasicDBObject(name, new BasicDBObject("$push", p));
+        Document o = new Document(name, new Document("$push", p));
         operators.add(o);
         return this;
     }
@@ -88,7 +87,7 @@ public class Group<T, R> {
     }
 
     public Group<T, R> sum(String name, Object p) {
-        BasicDBObject o = new BasicDBObject(name, new BasicDBObject("$sum", p));
+        Document o = new Document(name, new Document("$sum", p));
         operators.add(o);
         return this;
     }
@@ -98,17 +97,17 @@ public class Group<T, R> {
     }
 
     public Aggregator<T, R> end() {
-        BasicDBObject params = new BasicDBObject();
-        params.putAll((DBObject) id);
-        for (BasicDBObject o : operators) {
-            params.putAll((DBObject) o);
+        Document params = new Document();
+        params.putAll(id);
+        for (Document o : operators) {
+            params.putAll(o);
         }
-        DBObject obj = new BasicDBObject("$group", params);
+        Document obj = new Document("$group", params);
         aggregator.addOperator(obj);
         return aggregator;
     }
 
-    public List<BasicDBObject> getOperators() {
+    public List<Document> getOperators() {
         return operators;
     }
 }

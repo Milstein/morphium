@@ -1,11 +1,10 @@
 package de.caluga.morphium.cache;
 
-import com.mongodb.BasicDBObject;
-import com.mongodb.DBObject;
 import de.caluga.morphium.AnnotationAndReflectionHelper;
 import de.caluga.morphium.Logger;
 import de.caluga.morphium.annotations.caching.Cache;
 import de.caluga.morphium.query.Query;
+import org.bson.Document;
 
 import java.util.*;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -175,7 +174,7 @@ public class MorphiumCacheImpl implements MorphiumCache {
 
     @SuppressWarnings("StringBufferMayBeStringBuilder")
     @Override
-    public String getCacheKey(DBObject qo, Map<String, Integer> sort, String collection, int skip, int limit) {
+    public String getCacheKey(Document qo, Map<String, Object> sort, String collection, int skip, int limit) {
         StringBuilder b = new StringBuilder();
         b.append(qo.toString());
         b.append(" c:" + collection);
@@ -185,7 +184,7 @@ public class MorphiumCacheImpl implements MorphiumCache {
         b.append(skip);
         if (sort != null) {
             b.append(" sort:");
-            b.append(new BasicDBObject(sort).toString());
+            b.append(new Document(sort).toString());
         }
         return b.toString();
     }
