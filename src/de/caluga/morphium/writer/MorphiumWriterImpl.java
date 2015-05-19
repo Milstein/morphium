@@ -10,6 +10,7 @@ import de.caluga.morphium.*;
 import de.caluga.morphium.annotations.*;
 import de.caluga.morphium.async.AsyncOperationCallback;
 import de.caluga.morphium.async.AsyncOperationType;
+import de.caluga.morphium.bulk.BulkOperationContext;
 import de.caluga.morphium.query.Query;
 import org.bson.BsonDocument;
 import org.bson.BsonInt32;
@@ -19,7 +20,6 @@ import org.bson.types.ObjectId;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
-import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.concurrent.SynchronousQueue;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -114,7 +114,7 @@ public class MorphiumWriterImpl implements MorphiumWriter {
                             reread = morphium.findById(o.getClass(), id);
                             isNew = reread == null;
                         }
-                        isNew = setAutoValues(o, type, id, isNew, reread);
+                        isNew = morphium.getARHelper().setAutoValues(morphium, o, type, id, isNew, reread);
 
                     }
                     morphium.firePreStoreEvent(o, isNew);
@@ -249,184 +249,63 @@ public class MorphiumWriterImpl implements MorphiumWriter {
         submitAndBlockIfNecessary(callback, r);
     }
 
-    private <T> boolean setAutoValues(T o, Class type, Object id, boolean aNew, Object reread) throws IllegalAccessException {
-        if (!morphium.isAutoValuesEnabledForThread()) return aNew;
-        //new object - need to store creation time
-        if (morphium.getARHelper().isAnnotationPresentInHierarchy(type, CreationTime.class)) {
-            CreationTime ct = morphium.getARHelper().getAnnotationFromHierarchy(o.getClass(), CreationTime.class);
-            boolean checkForNew = ct.checkForNew() || morphium.getConfig().isCheckForNew();
-            List<String> lst = morphium.getARHelper().getFields(type, CreationTime.class);
-            for (String fld : lst) {
-                Field field = morphium.getARHelper().getField(o.getClass(), fld);
-                if (id != null) {
-                    if (checkForNew && reread == null) {
-                        reread = morphium.findById(o.getClass(), id);
-                        aNew = reread == null;
-                    } else {
-                        if (reread == null) {
-                            aNew = (id instanceof ObjectId && id == null); //if id null, is new. if id!=null probably not, if type is objectId
-                        } else {
-                            Object value = field.get(reread);
-                            field.set(o, value);
-                            aNew = false;
-                        }
-                    }
-                } else {
-                    aNew = true;
-                }
-            }
-            if (aNew) {
-                if (lst == null || lst.size() == 0) {
-                    logger.error("Unable to store creation time as @CreationTime for field is missing");
-                } else {
-                    long now = System.currentTimeMillis();
-                    for (String ctf : lst) {
-                        Object val = null;
-
-                        Field f = morphium.getARHelper().getField(type, ctf);
-                        if (f.getType().equals(long.class) || f.getType().equals(Long.class)) {
-                            val = new Long(now);
-                        } else if (f.getType().equals(Date.class)) {
-                            val = new Date(now);
-                        } else if (f.getType().equals(String.class)) {
-                            CreationTime ctField = f.getAnnotation(CreationTime.class);
-                            SimpleDateFormat df = new SimpleDateFormat(ctField.dateFormat());
-                            val = df.format(now);
-                        }
-
-                        if (f != null) {
-                            try {
-                                f.set(o, val);
-                            } catch (IllegalAccessException e) {
-                                logger.error("Could not set creation time", e);
-
-                            }
-                        }
-
-                    }
-
-                }
-
-            }
-        }
-
-
-        if (morphium.getARHelper().isAnnotationPresentInHierarchy(type, LastChange.class)) {
-            List<String> lst = morphium.getARHelper().getFields(type, LastChange.class);
-            if (lst != null && lst.size() > 0) {
-                long now = System.currentTimeMillis();
-                for (String ctf : lst) {
-                    Object val = null;
-
-                    Field f = morphium.getARHelper().getField(type, ctf);
-                    if (f.getType().equals(long.class) || f.getType().equals(Long.class)) {
-                        val = new Long(now);
-                    } else if (f.getType().equals(Date.class)) {
-                        val = new Date(now);
-                    } else if (f.getType().equals(String.class)) {
-                        LastChange ctField = f.getAnnotation(LastChange.class);
-                        SimpleDateFormat df = new SimpleDateFormat(ctField.dateFormat());
-                        val = df.format(now);
-                    }
-
-                    if (f != null) {
-                        try {
-                            f.set(o, val);
-                        } catch (IllegalAccessException e) {
-                            logger.error("Could not set modification time", e);
-
-                        }
-                    }
-                }
-            } else {
-                logger.warn("Could not store last change - @LastChange missing!");
-            }
-
-        }
-        return aNew;
-    }
-
     @Override
-    public <T> void store(final List<T> lst, String collectionName, AsyncOperationCallback<T> callback) {
+    public <T> void store(final List<T> lst, String collectionName, final AsyncOperationCallback<T> callback) {
         if (lst == null || lst.size() == 0) return;
         ArrayList<Document> dbLst = new ArrayList<Document>();
-        MongoCollection<Document> collection = morphium.getDatabase().getCollection(collectionName);
         WriteConcern wc = morphium.getWriteConcernForClass(lst.get(0).getClass());
+        BulkOperationContext bctx = new BulkOperationContext(morphium, false);
+        bctx.insertList(lst);
+        bctx.execute(callback);
+//
+//        BulkWriteOperation bulkWriteOperation = collection.initializeUnorderedBulkOperation();
+//        HashMap<Object, Boolean> isNew = new HashMap<Object, Boolean>();
+//        if (!morphium.getDatabase().collectionExists(collectionName)) {
+//            logger.warn("collection does not exist while storing list -  taking first element of list to ensure indices");
+//            morphium.ensureIndicesFor((Class<T>) lst.get(0).getClass(), collectionName, callback);
+//        }
+//        long start = System.currentTimeMillis();
+//        int cnt = 0;
+//        List<Class<?>> types = new ArrayList<Class<?>>();
+//        for (Object record : lst) {
+//            Document marshall = morphium.getMapper().marshall(record);
+//            Object id = morphium.getARHelper().getId(record);
+//            boolean isn = id == null;
+//            Object reread = null;
+//
+//            isNew.put(record, isn);
+//
+//            if (!types.contains(record.getClass())) types.add(record.getClass());
+//            if (isNew.get(record)) {
+//                dbLst.add(marshall);
+//            } else {
+//                //single update
+//                WriteResult result = null;
+//                cnt++;
+//                BulkUpdateRequestBuilder up = bulkWriteOperation.find(new Document("_id", morphium.getARHelper().getId(record))).upsert();
+//                up.updateOne(new Document("$set", marshall));
+//            }
+//        }
+//        morphium.firePreStoreEvent(isNew);
+//        if (cnt > 0) {
+//            for (int i = 0; i < morphium.getConfig().getRetriesOnNetworkError(); i++) {
+//                try {
+//                    //storing updates
+//                    if (wc == null) {
+//                        bulkWriteOperation.execute();
+//                    } else {
+//                        bulkWriteOperation.execute(wc);
+//                    }
+//                } catch (Exception e) {
+//                    morphium.handleNetworkError(i, e);
+//                }
+//            }
+//            for (Class<?> c : types) {
+//                morphium.getCache().clearCacheIfNecessary(c);
+//            }
+//        }
 
-        BulkWriteOperation bulkWriteOperation = collection.initializeUnorderedBulkOperation();
-        HashMap<Object, Boolean> isNew = new HashMap<Object, Boolean>();
-        if (!morphium.getDatabase().collectionExists(collectionName)) {
-            logger.warn("collection does not exist while storing list -  taking first element of list to ensure indices");
-            morphium.ensureIndicesFor((Class<T>) lst.get(0).getClass(), collectionName, callback);
-        }
-        long start = System.currentTimeMillis();
-        int cnt = 0;
-        List<Class<?>> types = new ArrayList<Class<?>>();
-        for (Object record : lst) {
-            Document marshall = morphium.getMapper().marshall(record);
-            Object id = morphium.getARHelper().getId(record);
-            boolean isn = id == null;
-            Object reread = null;
-            if (morphium.isAutoValuesEnabledForThread()) {
-                CreationTime creationTime = morphium.getARHelper().getAnnotationFromHierarchy(record.getClass(), CreationTime.class);
-                if (!isn && (morphium.getConfig().isCheckForNew() || (creationTime != null && creationTime.checkForNew()))
-                        && !morphium.getARHelper().getIdField(record).getType().equals(ObjectId.class)) {
-                    //check if it exists
-                    reread = morphium.findById(record.getClass(), id);
-                    isn = reread == null;
-                }
-                try {
-                    isn = setAutoValues(record, record.getClass(), id, isn, reread);
-                } catch (IllegalAccessException e) {
-                    logger.error(e);
-                }
-            }
-            isNew.put(record, isn);
 
-            if (!types.contains(record.getClass())) types.add(record.getClass());
-            if (isNew.get(record)) {
-                dbLst.add(marshall);
-            } else {
-                //single update
-                WriteResult result = null;
-                cnt++;
-                BulkUpdateRequestBuilder up = bulkWriteOperation.find(new BasicDBObject("_id", morphium.getARHelper().getId(record))).upsert();
-                up.updateOne(new BasicDBObject("$set", marshall));
-            }
-        }
-        morphium.firePreStoreEvent(isNew);
-        if (cnt > 0) {
-            for (int i = 0; i < morphium.getConfig().getRetriesOnNetworkError(); i++) {
-                try {
-                    //storing updates
-                    if (wc == null) {
-                        bulkWriteOperation.execute();
-                    } else {
-                        bulkWriteOperation.execute(wc);
-                    }
-                } catch (Exception e) {
-                    morphium.handleNetworkError(i, e);
-                }
-            }
-            for (Class<?> c : types) {
-                morphium.getCache().clearCacheIfNecessary(c);
-            }
-        }
-
-        long dur = System.currentTimeMillis() - start;
-        morphium.fireProfilingWriteEvent(lst.get(0).getClass(), lst, dur, false, WriteAccessType.BULK_UPDATE);
-
-        start = System.currentTimeMillis();
-
-        if (wc == null) {
-            collection.insert(dbLst);
-        } else {
-            collection.insert(dbLst, wc);
-        }
-        dur = System.currentTimeMillis() - start;
-        //bulk insert
-        morphium.fireProfilingWriteEvent(lst.get(0).getClass(), dbLst, dur, true, WriteAccessType.BULK_INSERT);
-        morphium.firePostStore(isNew);
     }
 
     @Override
@@ -436,174 +315,6 @@ public class MorphiumWriterImpl implements MorphiumWriter {
 
     @Override
     public <T> void store(final List<T> lst, AsyncOperationCallback<T> callback) {
-        if (!lst.isEmpty()) {
-            WriterTask r = new WriterTask() {
-                private AsyncOperationCallback<T> callback;
-
-                @Override
-                public void setCallback(AsyncOperationCallback cb) {
-                    callback = cb;
-                }
-
-                public void run() {
-                    HashMap<Class, List<Object>> sorted = new HashMap<Class, List<Object>>();
-                    HashMap<Object, Boolean> isNew = new HashMap<Object, Boolean>();
-                    int cnt = 0;
-                    for (Object o : lst) {
-                        Class type = morphium.getARHelper().getRealClass(o.getClass());
-                        if (!morphium.getARHelper().isAnnotationPresentInHierarchy(type, Entity.class)) {
-                            logger.error("Not an entity! Storing not possible! Even not in list!");
-                            continue;
-                        }
-                        morphium.inc(StatisticKeys.WRITES);
-                        if (morphium.getARHelper().isAnnotationPresentInHierarchy(type, PartialUpdate.class)) {
-                            //not part of list, acutally...
-                            if ((o instanceof PartiallyUpdateable)) {
-                                //todo: use batch write
-                                morphium.updateUsingFields(o, ((PartiallyUpdateable) o).getAlteredFields().toArray(new String[((PartiallyUpdateable) o).getAlteredFields().size()]));
-                                ((PartiallyUpdateable) o).clearAlteredFields();
-                                continue;
-                            }
-                        }
-                        o = morphium.getARHelper().getRealObject(o);
-                        if (o == null) {
-                            logger.warn("Illegal Reference? - cannot store Lazy-Loaded / Partial Update Proxy without delegate!");
-                            return;
-                        }
-
-
-                        if (sorted.get(o.getClass()) == null) {
-                            sorted.put(o.getClass(), new ArrayList<Object>());
-                        }
-                        sorted.get(o.getClass()).add(o);
-                        boolean isn = morphium.getId(o) == null;
-                        Object reread = null;
-                        if (morphium.getARHelper().getAnnotationFromHierarchy(o.getClass(), CreationTime.class) != null) {
-                            try {
-                                isn = setAutoValues(o, o.getClass(), morphium.getId(o), isn, reread);
-                            } catch (IllegalAccessException e) {
-                                logger.error(e);
-                            }
-                        }
-                        if (isn) {
-                            if (!morphium.getARHelper().getIdField(o).getType().equals(ObjectId.class) && morphium.getId(o) == null) {
-                                throw new IllegalArgumentException("Cannot automatically set non -ObjectId IDs");
-                            }
-                            isNew.put(o, true);
-                        } else {
-                            isNew.put(o, false);
-                        }
-                        morphium.firePreStoreEvent(o, isNew.get(o));
-                    }
-                    long allStart = System.currentTimeMillis();
-                    try {
-                        for (Map.Entry<Class, List<Object>> es : sorted.entrySet()) {
-                            Class c = es.getKey();
-                            ArrayList<Document> dbLst = new ArrayList<Document>();
-                            //bulk insert... check if something already exists
-                            WriteConcern wc = morphium.getWriteConcernForClass(c);
-                            String coll = morphium.getMapper().getCollectionName(c);
-                            DBCollection collection = null;
-                            for (int i = 0; i < morphium.getConfig().getRetriesOnNetworkError(); i++) {
-                                try {
-                                    collection = morphium.getDatabase().getCollection(coll);
-                                    if (!morphium.getDatabase().collectionExists(coll)) {
-                                        createCappedColl(c);
-                                        morphium.ensureIndicesFor(c, coll, callback);
-                                    }
-                                    break;
-                                } catch (Throwable t) {
-                                    morphium.handleNetworkError(i, t);
-                                }
-                            }
-
-                            BulkWriteOperation bulkWriteOperation = collection.initializeUnorderedBulkOperation();
-                            long start = System.currentTimeMillis();
-
-                            HashMap<Integer, Object> mapMarshalledNewObjects = new HashMap<>();
-                            for (Object record : es.getValue()) {
-                                Document marshall = morphium.getMapper().marshall(record);
-                                if (isNew.get(record)) {
-                                    dbLst.add(marshall);
-                                    mapMarshalledNewObjects.put(dbLst.size() - 1, record);
-                                } else {
-                                    //bulk update
-                                    BulkWriteRequestBuilder findId = bulkWriteOperation.find(new BasicDBObject("_id", morphium.getARHelper().getId(record)));
-                                    findId.upsert().updateOne(new BasicDBObject("$set", marshall));
-                                    cnt++;
-                                    if (cnt >= morphium.getMaxWriteBatchSize()) {
-                                        executeWriteBatch(es.getValue(), c, wc, bulkWriteOperation, start);
-                                        cnt = 0;
-                                        bulkWriteOperation = collection.initializeUnorderedBulkOperation();
-                                    }
-                                }
-                            }
-
-                            if (cnt > 0)
-                                executeWriteBatch(es.getValue(), c, wc, bulkWriteOperation, start);
-                            start = System.currentTimeMillis();
-                            if (dbLst.size() > morphium.getMaxWriteBatchSize()) {
-                                int l = morphium.getMaxWriteBatchSize().intValue();
-                                for (int idx = 0; idx < dbLst.size(); idx += l) {
-                                    int end = idx + l;
-                                    if (end > dbLst.size()) {
-                                        end = dbLst.size();
-                                    }
-                                    List<Document> lst = dbLst.subList(idx, end);
-                                    doStoreList(lst, wc, collection);
-                                    for (Document o : lst) {
-                                        Object entity = mapMarshalledNewObjects.get(dbLst.indexOf(o));
-                                        if (entity == null) {
-                                            logger.error("cannot update mongo_id...");
-                                        } else {
-                                            try {
-                                                morphium.getARHelper().getIdField(entity).set(entity, o.get("_id"));
-                                            } catch (Exception e) {
-                                                logger.error("Setting of mongo_id failed", e);
-                                            }
-                                        }
-                                    }
-                                }
-
-                            } else if (dbLst.size() > 0) {
-                                doStoreList(dbLst, wc, collection);
-                                for (Document o : dbLst) {
-                                    Object entity = mapMarshalledNewObjects.get(dbLst.indexOf(o));
-                                    if (entity == null) {
-                                        logger.error("cannot update mongo_id...");
-                                    } else {
-                                        try {
-                                            morphium.getARHelper().getIdField(entity).set(entity, o.get("_id"));
-                                        } catch (Exception e) {
-                                            logger.error("Setting of mongo_id failed", e);
-                                        }
-                                    }
-                                }
-                            }
-                            morphium.getCache().clearCacheIfNecessary(c);
-                            long dur = System.currentTimeMillis() - start;
-                            //bulk insert
-                            morphium.fireProfilingWriteEvent(c, dbLst, dur, true, WriteAccessType.BULK_INSERT);
-                            for (Object record : es.getValue()) {
-                                if (isNew.get(record) == null || isNew.get(record)) { //null because key changed => mongo _id
-                                    morphium.firePostStoreEvent(record, true);
-                                }
-                            }
-                        }
-
-                        if (callback != null)
-                            callback.onOperationSucceeded(AsyncOperationType.WRITE, null, System.currentTimeMillis() - allStart, null, null, lst);
-                    } catch (Exception e) {
-                        if (e instanceof RuntimeException) {
-                            throw (RuntimeException) e;
-                        }
-                        if (callback == null) throw new RuntimeException(e);
-                        callback.onOperationError(AsyncOperationType.WRITE, null, System.currentTimeMillis() - allStart, e.getMessage(), e, null, lst);
-                    }
-                }
-            };
-            submitAndBlockIfNecessary(callback, r);
-        }
 
     }
 
@@ -611,7 +322,7 @@ public class MorphiumWriterImpl implements MorphiumWriter {
     private void createCappedColl(Class c) {
         if (logger.isDebugEnabled())
             logger.debug("Collection does not exist - ensuring indices / capped status");
-        BasicDBObject cmd = new BasicDBObject();
+        final Document cmd = new Document();
         cmd.put("create", morphium.getMapper().getCollectionName(c));
         Capped capped = morphium.getARHelper().getAnnotationFromHierarchy(c, Capped.class);
         if (capped != null) {
@@ -623,108 +334,89 @@ public class MorphiumWriterImpl implements MorphiumWriter {
             return;
         }
         cmd.put("autoIndexId", (morphium.getARHelper().getIdField(c).getType().equals(ObjectId.class)));
-        morphium.getDatabase().command(cmd);
-    }
-
-    private void doStoreList(List<Document> dbLst, WriteConcern wc, DBCollection collection) {
-        for (int i = 0; i < morphium.getConfig().getRetriesOnNetworkError(); i++) {
-            try {
-                if (wc == null) {
-                    collection.insert(dbLst);
-                } else {
-                    collection.insert(dbLst, wc);
-                }
-                break;
-            } catch (Exception e) {
-                morphium.handleNetworkError(i, e);
+        morphium.getDatabase().runCommand(cmd, new SingleResultCallback<Document>() {
+            @Override
+            public void onResult(Document result, Throwable t) {
+                cmd.notifyAll();
             }
+        });
+        try {
+            cmd.wait(morphium.getConfig().getAsyncOperationTimeout());
+        } catch (InterruptedException e) {
+            logger.error(e);
         }
+
     }
 
-
-    /**
-     * automatically convert the collection for the given type to a capped collection
-     * only works if @Capped annotation is given for type
-     *
-     * @param c - type
-     */
-    public <T> void convertToCapped(final Class<T> c) {
-        convertToCapped(c, null);
-    }
 
     public <T> void convertToCapped(final Class<T> c, final AsyncOperationCallback<T> callback) {
-        Runnable r = new Runnable() {
-            @Override
-            public void run() {
-                WriteConcern wc = morphium.getWriteConcernForClass(c);
-                String coll = morphium.getMapper().getCollectionName(c);
-                DBCollection collection = null;
+        convertToCapped(c, null, callback);
+    }
 
-                for (int i = 0; i < morphium.getConfig().getRetriesOnNetworkError(); i++) {
-                    try {
-                        collection = morphium.getDatabase().getCollection(coll);
-                        if (!morphium.getDatabase().collectionExists(coll)) {
-                            if (logger.isDebugEnabled())
-                                logger.debug("Collection does not exist - ensuring indices / capped status");
-                            BasicDBObject cmd = new BasicDBObject();
-                            cmd.put("create", coll);
-                            Capped capped = morphium.getARHelper().getAnnotationFromHierarchy(c, Capped.class);
-                            if (capped != null) {
-                                cmd.put("capped", true);
-                                cmd.put("size", capped.maxSize());
-                                cmd.put("max", capped.maxEntries());
-                            }
-                            cmd.put("autoIndexId", (morphium.getARHelper().getIdField(c).getType().equals(ObjectId.class)));
-                            morphium.getDatabase().command(cmd);
-                        } else {
-                            Capped capped = morphium.getARHelper().getAnnotationFromHierarchy(c, Capped.class);
-                            if (capped != null) {
-                                BasicDBObject cmd = new BasicDBObject();
-                                cmd.put("convertToCapped", coll);
-                                cmd.put("size", capped.maxSize());
-                                cmd.put("max", capped.maxEntries());
-                                morphium.getDatabase().command(cmd);
-                                //Indexes are not available after converting - recreate them
-                                morphium.ensureIndicesFor(c, callback);
-                            }
+    public <T> void convertToCapped(final Class<T> c, final String collectionName, final AsyncOperationCallback<T> callback) {
+        WriteConcern wc = morphium.getWriteConcernForClass(c);
+
+        final String coll = collectionName != null ? collectionName : morphium.getMapper().getCollectionName(c);
+
+        MongoCollection<Document> collection = morphium.getDatabase().getCollection(coll);
+        final BsonDocument cmd = new BsonDocument("collMod", new BsonString(morphium.getMapper().getCollectionName(c)));
+        final SingleResultCallback<Document> srcb = new SingleResultCallback<Document>() {
+            final long start = System.currentTimeMillis();
+            @Override
+            public void onResult(Document result, Throwable t) {
+                try {
+                    if (result.get("ok").equals(new BsonInt32(1))) {
+                        if (logger.isDebugEnabled())
+                            logger.debug("Collection does not exist - ensuring indices / capped status");
+                        Document cmd = new Document();
+                        cmd.put("create", coll);
+                        Capped capped = morphium.getARHelper().getAnnotationFromHierarchy(c, Capped.class);
+                        if (capped != null) {
+                            cmd.put("capped", true);
+                            cmd.put("size", capped.maxSize());
+                            cmd.put("max", capped.maxEntries());
                         }
-                        break;
-                    } catch (Throwable t) {
-                        morphium.handleNetworkError(i, t);
+                        cmd.put("autoIndexId", (morphium.getARHelper().getIdField(c).getType().equals(ObjectId.class)));
+                        morphium.getDatabase().runCommand(cmd, new SingleResultCallback<Document>() {
+                            @Override
+                            public void onResult(Document result, Throwable t) {
+                                if (t != null) {
+                                    callback.onOperationError(AsyncOperationType.CONVERT_TO_CAPPED, null, System.currentTimeMillis() - start, c, coll, t.getMessage(), t, null, result);
+                                } else {
+                                    callback.onOperationSucceeded(AsyncOperationType.CONVERT_TO_CAPPED, null, System.currentTimeMillis() - start, c, coll, null, null, result);
+                                }
+                            }
+                        });
+                    } else {
+                        Capped capped = morphium.getARHelper().getAnnotationFromHierarchy(c, Capped.class);
+                        if (capped != null) {
+                            Document cmd = new Document();
+                            cmd.put("convertToCapped", coll);
+                            cmd.put("size", capped.maxSize());
+                            cmd.put("max", capped.maxEntries());
+                            morphium.getDatabase().runCommand(cmd, new SingleResultCallback<Document>() {
+                                @Override
+                                public void onResult(Document result, Throwable t) {
+                                    if (t != null) {
+                                        callback.onOperationError(AsyncOperationType.CONVERT_TO_CAPPED, null, System.currentTimeMillis() - start, c, coll, t.getMessage(), t, null, result);
+                                    } else {
+                                        callback.onOperationSucceeded(AsyncOperationType.CONVERT_TO_CAPPED, null, System.currentTimeMillis() - start, c, coll, null, null, result);
+                                    }
+                                }
+                            });
+                            //Indexes are not available after converting - recreate them
+                            morphium.ensureIndicesFor(c, callback);
+                        }
                     }
+                } finally {
+
                 }
             }
         };
 
-        if (callback == null) {
-            r.run();
-        } else {
-            morphium.getAsyncOperationsThreadPool().execute(r);
-//            new Thread(r).start();
-        }
+
     }
 
-
-    private void executeWriteBatch(List<Object> es, Class c, WriteConcern wc, BulkWriteOperation bulkWriteOperation, long start) {
-        for (int i = 0; i < morphium.getConfig().getRetriesOnNetworkError(); i++) {
-            try {
-                BulkWriteResult result;
-                if (wc == null) {
-                    result = bulkWriteOperation.execute();
-                } else {
-                    result = bulkWriteOperation.execute(wc);
-                }
-                //TODO: to something with the result
-                break;
-            } catch (Exception e) {
-                morphium.handleNetworkError(i, e);
-            }
-            long dur = System.currentTimeMillis() - start;
-            morphium.fireProfilingWriteEvent(c, es, dur, false, WriteAccessType.BULK_UPDATE);
-            morphium.getCache().clearCacheIfNecessary(c);
-            morphium.firePostStoreEvent(es, false);
-        }
-    }
 
     @Override
     public <T> void set(final T toSet, final String collection, final String field, final Object v, final boolean insertIfNotExist, final boolean multiple, AsyncOperationCallback<T> callback) {
@@ -746,7 +438,7 @@ public class MorphiumWriterImpl implements MorphiumWriter {
                 if (coll == null) {
                     morphium.getMapper().getCollectionName(cls);
                 }
-                BasicDBObject query = new BasicDBObject();
+                Document query = new Document();
                 query.put("_id", morphium.getId(toSet));
                 Field f = morphium.getARHelper().getField(cls, field);
                 if (f == null) {
@@ -754,15 +446,15 @@ public class MorphiumWriterImpl implements MorphiumWriter {
                 }
                 String fieldName = morphium.getARHelper().getFieldName(cls, field);
 
-                BasicDBObject update = new BasicDBObject("$set", new BasicDBObject(fieldName, value));
+                Document update = new Document("$set", new Document(fieldName, value));
                 List<String> lastChangeFields = morphium.getARHelper().getFields(cls, LastChange.class);
                 if (lastChangeFields != null && lastChangeFields.size() != 0) {
                     for (String fL : lastChangeFields) {
                         Field fld = morphium.getARHelper().getField(cls, fL);
                         if (fld.getType().equals(Date.class)) {
-                            ((BasicDBObject) update.get("$set")).put(fL, new Date());
+                            ((Document) update.get("$set")).put(fL, new Date());
                         } else {
-                            ((BasicDBObject) update.get("$set")).put(fL, System.currentTimeMillis());
+                            ((Document) update.get("$set")).put(fL, System.currentTimeMillis());
                         }
                     }
                 }
@@ -775,9 +467,9 @@ public class MorphiumWriterImpl implements MorphiumWriter {
                         for (String fL : creationTimeFields) {
                             Field fld = morphium.getARHelper().getField(cls, fL);
                             if (fld.getType().equals(Date.class)) {
-                                ((BasicDBObject) update.get("$set")).put(fL, new Date());
+                                ((Document) update.get("$set")).put(fL, new Date());
                             } else {
-                                ((BasicDBObject) update.get("$set")).put(fL, System.currentTimeMillis());
+                                ((Document) update.get("$set")).put(fL, System.currentTimeMillis());
                             }
                         }
                     }
@@ -787,8 +479,8 @@ public class MorphiumWriterImpl implements MorphiumWriter {
                 WriteConcern wc = morphium.getWriteConcernForClass(cls);
                 long start = System.currentTimeMillis();
 
+
                 try {
-                    for (int i = 0; i < morphium.getConfig().getRetriesOnNetworkError(); i++) {
                         try {
                             if (insertIfNotExist && !morphium.getDatabase().collectionExists(coll)) {
                                 morphium.ensureIndicesFor(cls, coll, callback);
@@ -801,9 +493,7 @@ public class MorphiumWriterImpl implements MorphiumWriter {
                             }
                             break;
                         } catch (Throwable t) {
-                            morphium.handleNetworkError(i, t);
                         }
-                    }
                     long dur = System.currentTimeMillis() - start;
                     morphium.fireProfilingWriteEvent(cls, update, dur, false, WriteAccessType.SINGLE_UPDATE);
                     morphium.getCache().clearCacheIfNecessary(cls);
@@ -879,10 +569,10 @@ public class MorphiumWriterImpl implements MorphiumWriter {
                 morphium.firePreStoreEvent(ent, false);
                 morphium.inc(StatisticKeys.WRITES);
 
-                Document find = new BasicDBObject();
+                Document find = new Document();
 
                 find.put("_id", id);
-                Document update = new BasicDBObject();
+                Document update = new Document();
                 for (String f : fields) {
                     try {
                         Object value = morphium.getARHelper().getValue(ent, f);
@@ -917,7 +607,7 @@ public class MorphiumWriterImpl implements MorphiumWriter {
                 }
 
 
-                update = new BasicDBObject("$set", update);
+                update = new Document("$set", update);
                 WriteConcern wc = morphium.getWriteConcernForClass(type);
                 long start = System.currentTimeMillis();
                 try {
@@ -1065,7 +755,7 @@ public class MorphiumWriterImpl implements MorphiumWriter {
             public void run() {
                 Object id = morphium.getARHelper().getId(o);
                 morphium.firePreRemove(o);
-                BasicDBObject db = new BasicDBObject();
+                Document db = new Document();
                 db.append("_id", id);
                 WriteConcern wc = morphium.getWriteConcernForClass(o.getClass());
 
@@ -1129,7 +819,7 @@ public class MorphiumWriterImpl implements MorphiumWriter {
                 morphium.firePreUpdateEvent(morphium.getARHelper().getRealClass(cls), MorphiumStorageListener.UpdateTypes.INC);
                 String coll = collection;
                 if (coll == null) coll = morphium.getMapper().getCollectionName(cls);
-                BasicDBObject query = new BasicDBObject();
+                Document query = new Document();
                 query.put("_id", morphium.getId(toInc));
                 Field f = morphium.getARHelper().getField(cls, field);
                 if (f == null) {
@@ -1137,7 +827,7 @@ public class MorphiumWriterImpl implements MorphiumWriter {
                 }
                 String fieldName = morphium.getARHelper().getFieldName(cls, field);
 
-                BasicDBObject update = new BasicDBObject("$inc", new BasicDBObject(fieldName, amount));
+                Document update = new Document("$inc", new Document(fieldName, amount));
                 WriteConcern wc = morphium.getWriteConcernForClass(toInc.getClass());
 
                 long start = System.currentTimeMillis();
@@ -1216,8 +906,8 @@ public class MorphiumWriterImpl implements MorphiumWriter {
                 morphium.firePreUpdateEvent(morphium.getARHelper().getRealClass(cls), MorphiumStorageListener.UpdateTypes.INC);
                 String coll = query.getCollectionName();
 
-                BasicDBObject update = new BasicDBObject();
-                update.put("$inc", new BasicDBObject(fieldsToInc));
+                Document update = new Document();
+                update.put("$inc", new Document(fieldsToInc));
                 Document qobj = query.toQueryObject();
                 if (insertIfNotExist) {
                     qobj = morphium.simplifyQueryObject(qobj);
@@ -1274,7 +964,7 @@ public class MorphiumWriterImpl implements MorphiumWriter {
                 morphium.firePreUpdateEvent(morphium.getARHelper().getRealClass(cls), MorphiumStorageListener.UpdateTypes.INC);
                 String coll = query.getCollectionName();
                 String fieldName = morphium.getARHelper().getFieldName(cls, field);
-                BasicDBObject update = new BasicDBObject("$inc", new BasicDBObject(fieldName, amount));
+                Document update = new Document("$inc", new Document(fieldName, amount));
                 Document qobj = query.toQueryObject();
                 if (insertIfNotExist) {
                     qobj = morphium.simplifyQueryObject(qobj);
@@ -1340,12 +1030,12 @@ public class MorphiumWriterImpl implements MorphiumWriter {
                 Class<?> cls = query.getType();
                 String coll = query.getCollectionName();
                 morphium.firePreUpdateEvent(morphium.getARHelper().getRealClass(cls), MorphiumStorageListener.UpdateTypes.SET);
-                BasicDBObject toSet = new BasicDBObject();
+                Document toSet = new Document();
                 for (Map.Entry<String, Object> ef : values.entrySet()) {
                     String fieldName = morphium.getARHelper().getFieldName(cls, ef.getKey());
                     toSet.put(fieldName, marshallIfNecessary(ef.getValue()));
                 }
-                BasicDBObject update = new BasicDBObject("$set", toSet);
+                Document update = new Document("$set", toSet);
                 Document qobj = query.toQueryObject();
                 if (insertIfNotExist) {
                     qobj = morphium.simplifyQueryObject(qobj);
@@ -1355,9 +1045,9 @@ public class MorphiumWriterImpl implements MorphiumWriter {
                             for (String fL : creationTimeFlds) {
                                 Field fld = morphium.getARHelper().getField(cls, fL);
                                 if (fld.getType().equals(Date.class)) {
-                                    ((BasicDBObject) update.get("$set")).put(fL, new Date());
+                                    ((Document) update.get("$set")).put(fL, new Date());
                                 } else {
-                                    ((BasicDBObject) update.get("$set")).put(fL, System.currentTimeMillis());
+                                    ((Document) update.get("$set")).put(fL, System.currentTimeMillis());
                                 }
                             }
                         }
@@ -1370,9 +1060,9 @@ public class MorphiumWriterImpl implements MorphiumWriter {
                     for (String fL : latChangeFlds) {
                         Field fld = morphium.getARHelper().getField(cls, fL);
                         if (fld.getType().equals(Date.class)) {
-                            ((BasicDBObject) update.get("$set")).put(fL, new Date());
+                            ((Document) update.get("$set")).put(fL, new Date());
                         } else {
-                            ((BasicDBObject) update.get("$set")).put(fL, System.currentTimeMillis());
+                            ((Document) update.get("$set")).put(fL, System.currentTimeMillis());
                         }
                     }
                 }
@@ -1442,7 +1132,7 @@ public class MorphiumWriterImpl implements MorphiumWriter {
                 for (String f : fields) {
                     toSet.put(f, ""); //value is ignored
                 }
-                BasicDBObject update = new BasicDBObject("$unset", toSet);
+                Document update = new Document("$unset", toSet);
                 WriteConcern wc = morphium.getWriteConcernForClass(cls);
                 long start = System.currentTimeMillis();
                 try {
@@ -1504,7 +1194,7 @@ public class MorphiumWriterImpl implements MorphiumWriter {
 
                 String coll = collection;
                 if (coll == null) coll = morphium.getMapper().getCollectionName(cls);
-                BasicDBObject query = new BasicDBObject();
+                Document query = new Document();
                 query.put("_id", morphium.getId(toSet));
                 Field f = morphium.getARHelper().getField(cls, field);
                 if (f == null) {
@@ -1512,7 +1202,7 @@ public class MorphiumWriterImpl implements MorphiumWriter {
                 }
                 String fieldName = morphium.getARHelper().getFieldName(cls, field);
 
-                BasicDBObject update = new BasicDBObject("$unset", new BasicDBObject(fieldName, 1));
+                Document update = new Document("$unset", new Document(fieldName, 1));
                 WriteConcern wc = morphium.getWriteConcernForClass(toSet.getClass());
 
                 long start = System.currentTimeMillis();
@@ -1535,13 +1225,13 @@ public class MorphiumWriterImpl implements MorphiumWriter {
 
                         List<String> lastChangeFields = morphium.getARHelper().getFields(cls, LastChange.class);
                         if (lastChangeFields != null && lastChangeFields.size() != 0) {
-                            update = new BasicDBObject("$set", new BasicDBObject());
+                            update = new Document("$set", new Document());
                             for (String fL : lastChangeFields) {
                                 Field fld = morphium.getARHelper().getField(cls, fL);
                                 if (fld.getType().equals(Date.class)) {
-                                    ((BasicDBObject) update.get("$set")).put(fL, new Date());
+                                    ((Document) update.get("$set")).put(fL, new Date());
                                 } else {
-                                    ((BasicDBObject) update.get("$set")).put(fL, System.currentTimeMillis());
+                                    ((Document) update.get("$set")).put(fL, System.currentTimeMillis());
                                 }
                             }
                             if (wc == null) {
@@ -1598,7 +1288,7 @@ public class MorphiumWriterImpl implements MorphiumWriter {
 
                 String coll = collection;
                 if (coll == null) coll = morphium.getMapper().getCollectionName(cls);
-                BasicDBObject query = new BasicDBObject();
+                Document query = new Document();
                 query.put("_id", morphium.getId(obj));
                 Field f = morphium.getARHelper().getField(cls, field);
                 if (f == null) {
@@ -1606,7 +1296,7 @@ public class MorphiumWriterImpl implements MorphiumWriter {
                 }
                 String fieldName = morphium.getARHelper().getFieldName(cls, field);
 
-                BasicDBObject update = new BasicDBObject("$pop", new BasicDBObject(fieldName, first ? -1 : 1));
+                Document update = new Document("$pop", new Document(fieldName, first ? -1 : 1));
                 WriteConcern wc = morphium.getWriteConcernForClass(obj.getClass());
 
                 long start = System.currentTimeMillis();
@@ -1629,13 +1319,13 @@ public class MorphiumWriterImpl implements MorphiumWriter {
 
                         List<String> lastChangeFields = morphium.getARHelper().getFields(cls, LastChange.class);
                         if (lastChangeFields != null && lastChangeFields.size() != 0) {
-                            update = new BasicDBObject("$set", new BasicDBObject());
+                            update = new Document("$set", new Document());
                             for (String fL : lastChangeFields) {
                                 Field fld = morphium.getARHelper().getField(cls, fL);
                                 if (fld.getType().equals(Date.class)) {
-                                    ((BasicDBObject) update.get("$set")).put(fL, new Date());
+                                    ((Document) update.get("$set")).put(fL, new Date());
                                 } else {
-                                    ((BasicDBObject) update.get("$set")).put(fL, System.currentTimeMillis());
+                                    ((Document) update.get("$set")).put(fL, System.currentTimeMillis());
                                 }
                             }
                             if (wc == null) {
@@ -1698,8 +1388,8 @@ public class MorphiumWriterImpl implements MorphiumWriter {
                 Object v = marshallIfNecessary(value);
 
                 String fieldName = morphium.getARHelper().getFieldName(cls, field);
-                BasicDBObject set = new BasicDBObject(fieldName, v);
-                BasicDBObject update = new BasicDBObject(push ? "$push" : "$pull", set);
+                Document set = new Document(fieldName, v);
+                Document update = new Document(push ? "$push" : "$pull", set);
 
                 long start = System.currentTimeMillis();
 
@@ -1760,20 +1450,20 @@ public class MorphiumWriterImpl implements MorphiumWriter {
         return value;
     }
 
-    private void pushIt(boolean push, boolean insertIfNotExist, boolean multiple, Class<?> cls, String coll, Document qobj, BasicDBObject update) {
+    private void pushIt(boolean push, boolean insertIfNotExist, boolean multiple, Class<?> cls, String coll, Document qobj, Document update) {
         morphium.firePreUpdateEvent(morphium.getARHelper().getRealClass(cls), push ? MorphiumStorageListener.UpdateTypes.PUSH : MorphiumStorageListener.UpdateTypes.PULL);
 
         List<String> lastChangeFields = morphium.getARHelper().getFields(cls, LastChange.class);
         if (lastChangeFields != null && lastChangeFields.size() != 0) {
-            update.put("$set", new BasicDBObject());
+            update.put("$set", new Document());
             for (String fL : lastChangeFields) {
                 Field fld = morphium.getARHelper().getField(cls, fL);
 
                 if (fld.getType().equals(Date.class)) {
 
-                    ((BasicDBObject) update.get("$set")).put(fL, new Date());
+                    ((Document) update.get("$set")).put(fL, new Date());
                 } else {
-                    ((BasicDBObject) update.get("$set")).put(fL, System.currentTimeMillis());
+                    ((Document) update.get("$set")).put(fL, System.currentTimeMillis());
                 }
             }
         }
@@ -1784,15 +1474,15 @@ public class MorphiumWriterImpl implements MorphiumWriter {
                 if (cnt == 0) {
                     //not found, would insert
                     if (update.get("$set") == null) {
-                        update.put("$set", new BasicDBObject());
+                        update.put("$set", new Document());
                     }
                     for (String fL : creationTimeFields) {
                         Field fld = morphium.getARHelper().getField(cls, fL);
 
                         if (fld.getType().equals(Date.class)) {
-                            ((BasicDBObject) update.get("$set")).put(fL, new Date());
+                            ((Document) update.get("$set")).put(fL, new Date());
                         } else {
-                            ((BasicDBObject) update.get("$set")).put(fL, System.currentTimeMillis());
+                            ((Document) update.get("$set")).put(fL, System.currentTimeMillis());
                         }
                     }
                 }
@@ -1852,20 +1542,20 @@ public class MorphiumWriterImpl implements MorphiumWriter {
                     }
 
                     field = morphium.getARHelper().getFieldName(cls, field);
-                    BasicDBObject set = new BasicDBObject(field, value);
-                    BasicDBObject update = new BasicDBObject(push ? "$pushAll" : "$pullAll", set);
+                    Document set = new Document(field, value);
+                    Document update = new Document(push ? "$pushAll" : "$pullAll", set);
 
                     List<String> lastChangeFields = morphium.getARHelper().getFields(cls, LastChange.class);
                     if (lastChangeFields != null && lastChangeFields.size() != 0) {
-                        update.put("$set", new BasicDBObject());
+                        update.put("$set", new Document());
                         for (String fL : lastChangeFields) {
                             Field fld = morphium.getARHelper().getField(cls, fL);
 
                             if (fld.getType().equals(Date.class)) {
 
-                                ((BasicDBObject) update.get("$set")).put(fL, new Date());
+                                ((Document) update.get("$set")).put(fL, new Date());
                             } else {
-                                ((BasicDBObject) update.get("$set")).put(fL, System.currentTimeMillis());
+                                ((Document) update.get("$set")).put(fL, System.currentTimeMillis());
                             }
                         }
                     }
@@ -1876,15 +1566,15 @@ public class MorphiumWriterImpl implements MorphiumWriter {
                             if (cnt == 0) {
                                 //not found, would insert
                                 if (update.get("$set") == null) {
-                                    update.put("$set", new BasicDBObject());
+                                    update.put("$set", new Document());
                                 }
                                 for (String fL : creationTimeFields) {
                                     Field fld = morphium.getARHelper().getField(cls, fL);
 
                                     if (fld.getType().equals(Date.class)) {
-                                        ((BasicDBObject) update.get("$set")).put(fL, new Date());
+                                        ((Document) update.get("$set")).put(fL, new Date());
                                     } else {
-                                        ((BasicDBObject) update.get("$set")).put(fL, System.currentTimeMillis());
+                                        ((Document) update.get("$set")).put(fL, System.currentTimeMillis());
                                     }
                                 }
                             }
@@ -1985,7 +1675,7 @@ public class MorphiumWriterImpl implements MorphiumWriter {
                     idx.put(fn, es.getValue());
                 }
                 long start = System.currentTimeMillis();
-                BasicDBObject keys = new BasicDBObject(idx);
+                Document keys = new Document(idx);
                 String coll = collection;
                 if (coll == null) coll = morphium.getMapper().getCollectionName(cls);
                 for (int i = 0; i < morphium.getConfig().getRetriesOnNetworkError(); i++) {
@@ -1993,7 +1683,7 @@ public class MorphiumWriterImpl implements MorphiumWriter {
                         if (options == null) {
                             morphium.getDatabase().getCollection(coll).ensureIndex(keys);
                         } else {
-                            BasicDBObject opts = new BasicDBObject(options);
+                            Document opts = new Document(options);
                             morphium.getDatabase().getCollection(coll).ensureIndex(keys, opts);
                         }
                     } catch (Exception e) {

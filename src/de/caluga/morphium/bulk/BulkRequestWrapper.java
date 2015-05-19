@@ -1,13 +1,16 @@
 package de.caluga.morphium.bulk;
 
 import com.mongodb.client.model.*;
+import de.caluga.morphium.Logger;
 import de.caluga.morphium.Morphium;
 import de.caluga.morphium.MorphiumStorageListener;
+import de.caluga.morphium.annotations.CreationTime;
 import de.caluga.morphium.annotations.Embedded;
 import de.caluga.morphium.annotations.Entity;
 import de.caluga.morphium.query.Query;
 import org.bson.Document;
 import org.bson.conversions.Bson;
+import org.bson.types.ObjectId;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -27,8 +30,11 @@ public class BulkRequestWrapper {
     private BulkOperationContext bc;
     private Query query;
     private WriteModel model = null;
+    private Object entity;
 
     private MorphiumStorageListener.UpdateTypes updateType;
+
+    private Logger log = new Logger(BulkRequestWrapper.class);
 
     public BulkRequestWrapper(Morphium m, BulkOperationContext bulk, Query q) {
         morphium = m;
@@ -50,6 +56,7 @@ public class BulkRequestWrapper {
     }
 
     public void insert(Object t) {
+        entity = t;
         model = new InsertOneModel(morphium.getMapper().marshall(t));
         updateType = MorphiumStorageListener.UpdateTypes.INSERT;
     }
@@ -60,6 +67,7 @@ public class BulkRequestWrapper {
     }
 
     public void replaceOne(Object obj, boolean upsert) {
+        entity = obj;
         updateType = MorphiumStorageListener.UpdateTypes.SET;
         UpdateOptions opts = new UpdateOptions();
         opts.upsert(upsert);
@@ -195,9 +203,28 @@ public class BulkRequestWrapper {
     }
 
     public void preExec() {
+
         if (updateType == null) {
             morphium.firePreRemoveEvent(query);
-
+        } else if (updateType.equals(MorphiumStorageListener.UpdateTypes.INSERT)) {
+            Object id = morphium.getARHelper().getId(entity);
+            boolean isn = id == null;
+            Object reread = null;
+            if (morphium.isAutoValuesEnabledForThread()) {
+                CreationTime creationTime = morphium.getARHelper().getAnnotationFromHierarchy(entity.getClass(), CreationTime.class);
+                if (!isn && (morphium.getConfig().isCheckForNew() || (creationTime != null && creationTime.checkForNew()))
+                        && !morphium.getARHelper().getIdField(entity).getType().equals(ObjectId.class)) {
+                    //check if it exists
+                    reread = morphium.findById(entity.getClass(), id);
+                    isn = reread == null;
+                }
+                try {
+                    isn = morphium.getARHelper().setAutoValues(morphium, entity, entity.getClass(), id, isn, reread);
+                } catch (IllegalAccessException e) {
+                    log.error(e);
+                }
+            }
+            morphium.firePreStoreEvent(entity, isn);
         } else {
             morphium.firePreUpdateEvent(query.getType(), updateType);
         }
@@ -215,6 +242,8 @@ public class BulkRequestWrapper {
     public void postExec() {
         if (updateType == null) {
             morphium.firePostRemoveEvent(query);
+        } else if (updateType.equals(MorphiumStorageListener.UpdateTypes.INSERT)) {
+            morphium.firePostStoreEvent(entity, morphium.getARHelper().getId(entity) == null);
         } else {
             morphium.firePostUpdateEvent(query.getType(), updateType);
         }

@@ -4,6 +4,7 @@ import com.mongodb.async.SingleResultCallback;
 import com.mongodb.bulk.BulkWriteResult;
 import com.mongodb.bulk.BulkWriteUpsert;
 import com.mongodb.client.model.BulkWriteOptions;
+import de.caluga.morphium.Logger;
 import de.caluga.morphium.Morphium;
 import de.caluga.morphium.async.AsyncOperationCallback;
 import de.caluga.morphium.async.AsyncOperationType;
@@ -28,6 +29,7 @@ public class BulkOperationContext {
 
     private Map<String, List<BulkRequestWrapper>> requestsByCollection;
     private final BulkWriteOptions opts;
+    private Logger log = new Logger(BulkOperationContext.class);
 
     public BulkOperationContext(Morphium m, boolean ordered) {
         morphium = m;
@@ -38,21 +40,35 @@ public class BulkOperationContext {
     }
 
     public <T> void insertList(List<T> o) {
+        insertList(o, null);
+    }
+
+    public <T> void insertList(List<T> o, String collection) {
         BulkRequestWrapper w = new BulkRequestWrapper(morphium, this, null);
         w.insertMany(o);
-        Class<? extends Object> cls = o.getClass();
-        addRequest(w, cls);
+        Class<? extends Object> cls = o.get(0).getClass();
+        if (collection != null) {
+            for (Object l : o) {
+                if (!cls.getClasses().equals(cls)) {
+                    log.info("writing different types into one collection " + collection);
+                }
+            }
+        }
+        addRequest(w, collection != null ? collection : morphium.getMapper().getCollectionName(cls));
     }
 
     public <T> void insert(T o) {
+        insert(o, null);
+    }
+
+    public <T> void insert(T o, String collection) {
         BulkRequestWrapper w = new BulkRequestWrapper(morphium, this, null);
         w.insert(o);
         Class<? extends Object> cls = o.getClass();
-        addRequest(w, cls);
+        addRequest(w, collection != null ? collection : morphium.getMapper().getCollectionName(cls));
     }
 
-    private void addRequest(BulkRequestWrapper w, Class<? extends Object> cls) {
-        String collectionName = morphium.getMapper().getCollectionName(cls);
+    private void addRequest(BulkRequestWrapper w, String collectionName) {
         if (requestsByCollection.get(collectionName) == null) {
             requestsByCollection.put(collectionName, new ArrayList<BulkRequestWrapper>());
         }
@@ -61,7 +77,8 @@ public class BulkOperationContext {
 
     public <T> BulkRequestWrapper addFind(Query<T> q) {
         BulkRequestWrapper w = new BulkRequestWrapper(morphium, this, q);
-        addRequest(w, q.getType());
+        String collectionName = q.getCollectionName();
+        addRequest(w, collectionName != null ? collectionName : morphium.getMapper().getCollectionName(q.getType()));
         return w;
     }
 

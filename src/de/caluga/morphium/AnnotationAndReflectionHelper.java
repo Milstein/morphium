@@ -4,6 +4,7 @@ import de.caluga.morphium.annotations.*;
 import de.caluga.morphium.annotations.caching.AsyncWrites;
 import de.caluga.morphium.annotations.caching.WriteBuffer;
 import de.caluga.morphium.annotations.lifecycle.Lifecycle;
+import org.bson.types.ObjectId;
 
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
@@ -68,6 +69,105 @@ public class AnnotationAndReflectionHelper {
         WriteBuffer wb = getAnnotationFromHierarchy(cls, WriteBuffer.class);
         return wb != null && wb.value();
     }
+
+
+    public <T> boolean setAutoValues(Morphium morphium, T o, Class type, Object id, boolean aNew, Object reread) throws IllegalAccessException {
+        if (!morphium.isAutoValuesEnabledForThread()) return aNew;
+        //new object - need to store creation time
+        if (morphium.getARHelper().isAnnotationPresentInHierarchy(type, CreationTime.class)) {
+            CreationTime ct = morphium.getARHelper().getAnnotationFromHierarchy(o.getClass(), CreationTime.class);
+            boolean checkForNew = ct.checkForNew() || morphium.getConfig().isCheckForNew();
+            List<String> lst = morphium.getARHelper().getFields(type, CreationTime.class);
+            for (String fld : lst) {
+                Field field = morphium.getARHelper().getField(o.getClass(), fld);
+                if (id != null) {
+                    if (checkForNew && reread == null) {
+                        reread = morphium.findById(o.getClass(), id);
+                        aNew = reread == null;
+                    } else {
+                        if (reread == null) {
+                            aNew = (id instanceof ObjectId && id == null); //if id null, is new. if id!=null probably not, if type is objectId
+                        } else {
+                            Object value = field.get(reread);
+                            field.set(o, value);
+                            aNew = false;
+                        }
+                    }
+                } else {
+                    aNew = true;
+                }
+            }
+            if (aNew) {
+                if (lst == null || lst.size() == 0) {
+                    log.error("Unable to store creation time as @CreationTime for field is missing");
+                } else {
+                    long now = System.currentTimeMillis();
+                    for (String ctf : lst) {
+                        Object val = null;
+
+                        Field f = morphium.getARHelper().getField(type, ctf);
+                        if (f.getType().equals(long.class) || f.getType().equals(Long.class)) {
+                            val = new Long(now);
+                        } else if (f.getType().equals(Date.class)) {
+                            val = new Date(now);
+                        } else if (f.getType().equals(String.class)) {
+                            CreationTime ctField = f.getAnnotation(CreationTime.class);
+                            SimpleDateFormat df = new SimpleDateFormat(ctField.dateFormat());
+                            val = df.format(now);
+                        }
+
+                        if (f != null) {
+                            try {
+                                f.set(o, val);
+                            } catch (IllegalAccessException e) {
+                                log.error("Could not set creation time", e);
+
+                            }
+                        }
+
+                    }
+
+                }
+
+            }
+        }
+
+
+        if (morphium.getARHelper().isAnnotationPresentInHierarchy(type, LastChange.class)) {
+            List<String> lst = morphium.getARHelper().getFields(type, LastChange.class);
+            if (lst != null && lst.size() > 0) {
+                long now = System.currentTimeMillis();
+                for (String ctf : lst) {
+                    Object val = null;
+
+                    Field f = morphium.getARHelper().getField(type, ctf);
+                    if (f.getType().equals(long.class) || f.getType().equals(Long.class)) {
+                        val = new Long(now);
+                    } else if (f.getType().equals(Date.class)) {
+                        val = new Date(now);
+                    } else if (f.getType().equals(String.class)) {
+                        LastChange ctField = f.getAnnotation(LastChange.class);
+                        SimpleDateFormat df = new SimpleDateFormat(ctField.dateFormat());
+                        val = df.format(now);
+                    }
+
+                    if (f != null) {
+                        try {
+                            f.set(o, val);
+                        } catch (IllegalAccessException e) {
+                            log.error("Could not set modification time", e);
+
+                        }
+                    }
+                }
+            } else {
+                log.warn("Could not store last change - @LastChange missing!");
+            }
+
+        }
+        return aNew;
+    }
+
 
     /**
      * returns annotations, even if in class hierarchy or

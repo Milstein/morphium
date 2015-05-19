@@ -517,6 +517,7 @@ public class Morphium {
     }
 
 
+
     /**
      * converts the given type to capped collection in Mongo, even if no @capped is defined!
      * <b>Warning:</b> depending on size this might take some time!
@@ -602,63 +603,55 @@ public class Morphium {
     }
 
     public <T> void ensureCapped(final Class<T> c, final AsyncOperationCallback<T> callback) {
-        Runnable r = new Runnable() {
+        final Object monitor = new Object();
+        final long start = System.currentTimeMillis();
+        final BsonDocument cmd = new BsonDocument("collMod", new BsonString(getMapper().getCollectionName(c)));
+        final SingleResultCallback<Document> srcb = new SingleResultCallback<Document>() {
+            private int i = 0;
+
             @Override
-            public void run() {
+            public void onResult(Document result, Throwable t) {
+                try {
+                    if (result.get("ok").equals(new BsonInt32(1))) {
+                        //exists
+                        Capped capped = annotationHelper.getAnnotationFromHierarchy(c, Capped.class);
+                        if (capped != null) {
 
-//                        if (collection.isCapped()) return; //TODO: find out how to do that with mongo driver 3.0
-
-                final Object monitor = new Object();
-                final long start = System.currentTimeMillis();
-                final BsonDocument cmd = new BsonDocument("collMod", new BsonString(getMapper().getCollectionName(c)));
-                final SingleResultCallback<Document> srcb = new SingleResultCallback<Document>() {
-                    private int i = 0;
-
-                    @Override
-                    public void onResult(Document result, Throwable t) {
-                        try {
-                            if (result.get("ok").equals(new BsonInt32(1))) {
-                                //exists
-                                Capped capped = annotationHelper.getAnnotationFromHierarchy(c, Capped.class);
-                                if (capped != null) {
-
-                                    convertToCapped(c, capped.maxSize(), null);
-                                }
-                            } else {
-                                WriteConcern wc = getWriteConcernForClass(c);
-                                final String coll = getMapper().getCollectionName(c);
-                                if (logger.isDebugEnabled())
-                                    logger.debug("Collection does not exist - ensuring indices / capped status");
-                                Document cmd = new Document();
-                                cmd.put("create", coll);
-                                Capped capped = annotationHelper.getAnnotationFromHierarchy(c, Capped.class);
-                                if (capped != null) {
-                                    cmd.put("capped", true);
-                                    cmd.put("size", capped.maxSize());
-                                    cmd.put("max", capped.maxEntries());
-                                }
-                                cmd.put("autoIndexId", (annotationHelper.getIdField(c).getType().equals(ObjectId.class)));
-                                getDatabase().runCommand(cmd, new SingleResultCallback<Document>() {
-                                    @Override
-                                    public void onResult(Document result, Throwable t) {
-                                        if (callback != null) {
-                                            List r = new ArrayList();
-                                            r.add(result);
-                                            callback.onOperationSucceeded(AsyncOperationType.CONVERT_TO_CAPPED, null, System.currentTimeMillis() - start, c, coll, r, null, c);
-                                        }
-                                    }
-                                });
-                            }
-                        } finally {
-                            monitor.notifyAll();
+                            convertToCapped(c, capped.maxSize(), null);
                         }
-
+                    } else {
+                        WriteConcern wc = getWriteConcernForClass(c);
+                        final String coll = getMapper().getCollectionName(c);
+                        if (logger.isDebugEnabled())
+                            logger.debug("Collection does not exist - ensuring indices / capped status");
+                        Document cmd = new Document();
+                        cmd.put("create", coll);
+                        Capped capped = annotationHelper.getAnnotationFromHierarchy(c, Capped.class);
+                        if (capped != null) {
+                            cmd.put("capped", true);
+                            cmd.put("size", capped.maxSize());
+                            cmd.put("max", capped.maxEntries());
+                        }
+                        cmd.put("autoIndexId", (annotationHelper.getIdField(c).getType().equals(ObjectId.class)));
+                        getDatabase().runCommand(cmd, new SingleResultCallback<Document>() {
+                            @Override
+                            public void onResult(Document result, Throwable t) {
+                                if (callback != null) {
+                                    List r = new ArrayList();
+                                    r.add(result);
+                                    callback.onOperationSucceeded(AsyncOperationType.CONVERT_TO_CAPPED, null, System.currentTimeMillis() - start, c, coll, r, null, c);
+                                }
+                            }
+                        });
                     }
-                };
-                getDatabase().runCommand(cmd, srcb);
+                } finally {
+                    monitor.notifyAll();
+                }
 
             }
         };
+        getDatabase().runCommand(cmd, srcb);
+
 
         if (callback == null) {
             try {
@@ -668,6 +661,7 @@ public class Morphium {
             }
         }
     }
+
 
 
     public Document simplifyQueryObject(Document q) {
@@ -2018,12 +2012,12 @@ public class Morphium {
 
     public <T, R> List<R> aggregate(final Aggregator<T, R> a) {
         MongoCollection coll = null;
-                coll = config.getDb().getCollection(objectMapper.getCollectionName(a.getSearchType()));
+        coll = config.getDb().getCollection(objectMapper.getCollectionName(a.getSearchType()));
         List<Document> agList = a.toAggregationList();
 //        Document first = agList.get(0);
         agList.remove(0);
         AggregateIterable resp = null;
-                resp = coll.aggregate(agList);
+        resp = coll.aggregate(agList);
 
         final List<R> ret = new ArrayList<R>();
         if (resp != null) resp.forEach(new Block() {

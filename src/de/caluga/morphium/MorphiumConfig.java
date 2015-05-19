@@ -93,8 +93,6 @@ public class MorphiumConfig {
     @Transient
     private MorphiumCache cache;
     private int replicaSetMonitoringTimeout = 5000;
-    private int retriesOnNetworkError = 1;
-    private int sleepBetweenNetworkErrorRetries = 1000;
     /**
      * login credentials for MongoDB - if necessary. If null, don't authenticate
      */
@@ -251,25 +249,6 @@ public class MorphiumConfig {
         cfg.getQueryFact().setQueryImpl(cfg.getQueryClass());
     }
 
-    public int getRetriesOnNetworkError() {
-        return retriesOnNetworkError;
-    }
-
-    public void setRetriesOnNetworkError(int retriesOnNetworkError) {
-        if (retriesOnNetworkError == 0) {
-            new Logger(MorphiumConfig.class).warn("Cannot set retries on network error to 0 - minimum is 1");
-            retriesOnNetworkError = 1;
-        }
-        this.retriesOnNetworkError = retriesOnNetworkError;
-    }
-
-    public int getSleepBetweenNetworkErrorRetries() {
-        return sleepBetweenNetworkErrorRetries;
-    }
-
-    public void setSleepBetweenNetworkErrorRetries(int sleepBetweenNetworkErrorRetries) {
-        this.sleepBetweenNetworkErrorRetries = sleepBetweenNetworkErrorRetries;
-    }
 
     public int getReplicaSetMonitoringTimeout() {
         return replicaSetMonitoringTimeout;
