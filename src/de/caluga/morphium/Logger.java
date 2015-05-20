@@ -48,12 +48,12 @@ public class Logger {
         }
 
         v = getSetting("log.synced");
-        if (getSetting("log.synced." + name) != null) v = getSetting("log.file." + name);
+        if (getSetting("log.synced." + name) != null) v = getSetting("log.synced." + name);
         if (v != null) {
             synced = v.equals("true");
         }
 
-        info("Logger " + name + " instanciated: Level: " + level + " Synced: " + synced + " file: " + file);
+//        info("Logger " + name + " instanciated: Level: " + level + " Synced: " + synced + " file: " + file);
     }
 
     @Override
@@ -93,6 +93,24 @@ public class Logger {
         }
         if (System.getProperty(s) != null) {
             v = System.getProperty(s);
+        }
+        if (v == null) {
+            //no setting yet, looking for prefixes
+            int lng = 0;
+            for (Map.Entry<Object, Object> p : System.getProperties().entrySet()) {
+                if (s.startsWith(p.getKey().toString())) {
+                    //prefix found
+                    if (p.getKey().toString().length() > lng) {
+                        //keeping the longest prefix
+                        //if s== log.level.de.caluga.morphium.ObjetMapperImpl
+                        // property: morphium.log.level.de.caluga.morphium=5
+                        // property: morphium.log.level.de.caluga=0
+                        // => keep only the longer one (5)
+                        lng = p.getKey().toString().length();
+                        v = p.getValue().toString();
+                    }
+                }
+            }
         }
 
         return v;
