@@ -8,5 +8,5 @@ package de.caluga.morphium.async;
  * TODO: Add documentation here
  */
 public enum AsyncOperationType {
-    READ, WRITE, UPDATE, SET, INC, UNSET, PUSH, PULL, REMOVE, ENSURE_INDICES, CONVERT_TO_CAPPED, BULK,
+    READ, WRITE, UPDATE, SET, INC, UNSET, PUSH, PULL, REMOVE, ENSURE_INDICES, CONVERT_TO_CAPPED, BULK, FIND,
 }

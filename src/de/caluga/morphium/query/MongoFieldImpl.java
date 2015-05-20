@@ -1,13 +1,15 @@
 package de.caluga.morphium.query;
 
-import com.mongodb.BasicDBList;
-import com.mongodb.BasicDBObject;
-import com.mongodb.DBRef;
 import de.caluga.morphium.FilterExpression;
 import de.caluga.morphium.MongoType;
+import de.caluga.morphium.MorphiumReference;
 import de.caluga.morphium.ObjectMapper;
 import de.caluga.morphium.annotations.Entity;
 import de.caluga.morphium.annotations.Reference;
+import org.bson.BsonArray;
+import org.bson.BsonDouble;
+import org.bson.BsonInt32;
+import org.bson.Document;
 import org.bson.types.ObjectId;
 
 import java.lang.reflect.Field;
@@ -88,7 +90,8 @@ public class MongoFieldImpl<T> implements MongoField<T> {
                         // list of references, this should be part of
                         //
                         // need to compare DBRefs
-                        val = new DBRef(null, val.getClass().getName(), id);
+
+                        val = new MorphiumReference(id, mapper.getCollectionName(val.getClass()));
                     } else {
                         // Reference
                         // here - query value is an entity AND it is referenced by the query type
@@ -183,9 +186,9 @@ public class MongoFieldImpl<T> implements MongoField<T> {
 
     @Override
     public Query<T> mod(int base, int val) {
-        BasicDBList lst = new BasicDBList();
-        lst.add(base);
-        lst.add(val);
+        BsonArray lst = new BsonArray();
+        lst.add(new BsonInt32(base));
+        lst.add(new BsonInt32(val));
         add("$mod", lst);
         return query;
     }
@@ -211,25 +214,28 @@ public class MongoFieldImpl<T> implements MongoField<T> {
 
     @Override
     public Query<T> in(Collection<?> vals) {
-        BasicDBList lst = new BasicDBList();
-        lst.addAll(vals);
-        add("$in", lst);
-        return query;
+//        BsonArray lst = new BsonArray();
+//        lst.addAll(vals);
+//        add("$in", lst);
+//        return query;
+        throw new RuntimeException("not implemented yet!");
     }
 
     @Override
     public Query<T> nin(Collection<?> vals) {
-        BasicDBList lst = new BasicDBList();
-        lst.addAll(vals);
-        add("$nin", lst);
-        return query;
+//        BsonArray lst = new BsonArray();
+//        lst.addAll(vals);
+//        add("$nin", lst);
+//        return query;
+        throw new RuntimeException("not implemented yet!");
+
     }
 
     @Override
     public Query<T> near(double x, double y) {
-        BasicDBList lst = new BasicDBList();
-        lst.add(x);
-        lst.add(y);
+        BsonArray lst = new BsonArray();
+        lst.add(new BsonDouble(x));
+        lst.add(new BsonDouble(y));
         add("$near", lst);
         return query;
     }
@@ -237,9 +243,9 @@ public class MongoFieldImpl<T> implements MongoField<T> {
 
     @Override
     public Query<T> nearSphere(double x, double y) {
-        BasicDBList lst = new BasicDBList();
-        lst.add(x);
-        lst.add(y);
+        BsonArray lst = new BsonArray();
+        lst.add(new BsonDouble(x));
+        lst.add(new BsonDouble(y));
         add("$nearSphere", lst);
         return query;
     }
@@ -249,13 +255,13 @@ public class MongoFieldImpl<T> implements MongoField<T> {
      * search for entries with geo coordinates wihtin the given rectancle - x,y upper left, x2,y2 lower right corner
      */
     public Query<T> box(double x, double y, double x2, double y2) {
-        BasicDBList lst = new BasicDBList();
-        BasicDBList p1 = new BasicDBList();
-        p1.add(x);
-        p1.add(y);
-        BasicDBList p2 = new BasicDBList();
-        p2.add(x2);
-        p2.add(y2);
+        BsonArray lst = new BsonArray();
+        BsonArray p1 = new BsonArray();
+        p1.add(new BsonDouble(x));
+        p1.add(new BsonDouble(y));
+        BsonArray p2 = new BsonArray();
+        p2.add(new BsonDouble(x2));
+        p2.add(new BsonDouble(y2));
 
         lst.add(p1);
         lst.add(p2);
@@ -265,7 +271,7 @@ public class MongoFieldImpl<T> implements MongoField<T> {
         FilterExpression withinExpression = new FilterExpression();
         withinExpression.setField("$within");
 
-        BasicDBObject box = new BasicDBObject();
+        Document box = new Document();
         box.put("$box", lst);
         withinExpression.setValue(box);
 
@@ -280,11 +286,11 @@ public class MongoFieldImpl<T> implements MongoField<T> {
         if (p.length % 2 == 1) {
             throw new IllegalArgumentException("Need a list of coordinates: x,y, x1,y1, x2,y2....");
         }
-        BasicDBList lst = new BasicDBList();
+        BsonArray lst = new BsonArray();
         for (int i = 0; i < p.length; i += 2) {
-            BasicDBList p1 = new BasicDBList();
-            p1.add(p[i]);
-            p1.add(p[i + 1]);
+            BsonArray p1 = new BsonArray();
+            p1.add(new BsonDouble(p[i]));
+            p1.add(new BsonDouble(p[i + 1]));
             lst.add(p1);
         }
 
@@ -293,7 +299,7 @@ public class MongoFieldImpl<T> implements MongoField<T> {
         FilterExpression withinExpression = new FilterExpression();
         withinExpression.setField("$within");
 
-        BasicDBObject box = new BasicDBObject();
+        Document box = new Document();
         box.put("$polygon", lst);
         withinExpression.setValue(box);
 
@@ -305,20 +311,20 @@ public class MongoFieldImpl<T> implements MongoField<T> {
 
     @Override
     public Query<T> center(double x, double y, double r) {
-        BasicDBList lst = new BasicDBList();
-        BasicDBList p1 = new BasicDBList();
-        p1.add(x);
-        p1.add(y);
+        BsonArray lst = new BsonArray();
+        BsonArray p1 = new BsonArray();
+        p1.add(new BsonDouble(x));
+        p1.add(new BsonDouble(y));
 
         lst.add(p1);
-        lst.add(r);
+        lst.add(new BsonDouble(r));
 
         List<FilterExpression> expressionList = new ArrayList<FilterExpression>();
 
         FilterExpression withinExpression = new FilterExpression();
         withinExpression.setField("$within");
 
-        BasicDBObject cnt = new BasicDBObject();
+        Document cnt = new Document();
         cnt.put("$center", lst);
         withinExpression.setValue(cnt);
 
@@ -330,20 +336,20 @@ public class MongoFieldImpl<T> implements MongoField<T> {
 
     @Override
     public Query<T> centerSphere(double x, double y, double r) {
-        BasicDBList lst = new BasicDBList();
-        BasicDBList p1 = new BasicDBList();
-        p1.add(x);
-        p1.add(y);
+        BsonArray lst = new BsonArray();
+        BsonArray p1 = new BsonArray();
+        p1.add(new BsonDouble(x));
+        p1.add(new BsonDouble(y));
 
         lst.add(p1);
-        lst.add(r);
+        lst.add(new BsonDouble(r));
 
         List<FilterExpression> expressionList = new ArrayList<FilterExpression>();
 
         FilterExpression withinExpression = new FilterExpression();
         withinExpression.setField("$within");
 
-        BasicDBObject cnt = new BasicDBObject();
+        Document cnt = new Document();
         cnt.put("$centerSphere", lst);
         withinExpression.setValue(cnt);
 
@@ -355,9 +361,9 @@ public class MongoFieldImpl<T> implements MongoField<T> {
 
     @Override
     public Query<T> nearSphere(double x, double y, double maxDistance) {
-        BasicDBList location = new BasicDBList();
-        location.add(x);
-        location.add(y);
+        BsonArray location = new BsonArray();
+        location.add(new BsonDouble(x));
+        location.add(new BsonDouble(y));
 
         List<FilterExpression> expressionList = new ArrayList<FilterExpression>();
 
@@ -378,9 +384,9 @@ public class MongoFieldImpl<T> implements MongoField<T> {
 
     @Override
     public Query<T> near(double x, double y, double maxDistance) {
-        BasicDBList location = new BasicDBList();
-        location.add(x);
-        location.add(y);
+        BsonArray location = new BsonArray();
+        location.add(new BsonDouble(x));
+        location.add(new BsonDouble(y));
 
         List<FilterExpression> expressionList = new ArrayList<FilterExpression>();
 
