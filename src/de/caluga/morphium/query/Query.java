@@ -221,7 +221,7 @@ public interface Query<T> extends Cloneable {
      * @param limit - maximium number of results
      * @return list of objects matching query
      */
-    public List<T> complexQuery(Document query, Map<String, Integer> sort, int skip, int limit);
+    public List<T> complexQuery(Document query, Map<String, Object> sort, int skip, int limit);
 
     public List<T> complexQuery(Document query, String sort, int skip, int limit);
 
@@ -233,9 +233,9 @@ public interface Query<T> extends Cloneable {
      */
     public T complexQueryOne(Document query);
 
-    public T complexQueryOne(Document query, Map<String, Integer> sort, int skip);
+    public T complexQueryOne(Document query, Map<String, Object> sort, int skip);
 
-    public T complexQueryOne(Document query, Map<String, Integer> sort);
+    public T complexQueryOne(Document query, Map<String, Object> sort);
 
     public int getLimit();
 
@@ -309,7 +309,9 @@ public interface Query<T> extends Cloneable {
     public void addReturnedField(Enum f);
 
 
-    public List distinct(String field);
+    List<T> complexQuery(Document query, Map<String, Object> sort, int skip, int limit, AsyncOperationCallback<T> cb);
+
+    public List distinct(String field, AsyncOperationCallback<T> callback);
 
     public enum TextSearchLanguages {
         danish,

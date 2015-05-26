@@ -11,6 +11,7 @@ import de.caluga.morphium.annotations.*;
 import de.caluga.morphium.annotations.caching.Cache;
 import de.caluga.morphium.async.AsyncOperationCallback;
 import de.caluga.morphium.async.AsyncOperationType;
+import org.bson.BsonArray;
 import org.bson.Document;
 
 import java.lang.reflect.Array;
@@ -135,7 +136,7 @@ public class QueryImpl<T> implements Query<T>, Cloneable {
 
     @Override
     public List<T> complexQuery(Document query, String sort, int skip, int limit) {
-        Map<String, Integer> srt = new HashMap<String, Integer>();
+        Map<String, Object> srt = new HashMap<String, Object>();
         if (sort != null) {
             String[] tok = sort.split(",");
             for (String t : tok) {
@@ -152,7 +153,7 @@ public class QueryImpl<T> implements Query<T>, Cloneable {
     }
 
     @Override
-    public List<T> complexQuery(Document query, Map<String, Integer> sort, int skip, int limit, final AsyncOperationCallback<T> cb) {
+    public List<T> complexQuery(Document query, Map<String, Object> sort, int skip, int limit, final AsyncOperationCallback<T> cb) {
         Cache ca = morphium.getARHelper().getAnnotationFromHierarchy(type, Cache.class); //type.getAnnotation(Cache.class);
         final boolean useCache = ca != null && ca.readCache() && morphium.isReadCacheEnabledForThread();
         final String ck = morphium.getCache().getCacheKey(query, sort, getCollectionName(), skip, limit);
@@ -248,8 +249,40 @@ public class QueryImpl<T> implements Query<T>, Cloneable {
     }
 
     @Override
-    public List distinct(String field) {
-        return morphium.getDatabase().getCollection(getCollectionName()).distinct(field, toQueryObject());
+    public List distinct(String field, final AsyncOperationCallback cb) {
+        Document cmd = new Document();
+        cmd.put("distinct", getCollectionName());
+        cmd.put("query", toQueryObject());
+        cmd.put("key", field);
+        final List l = new ArrayList();
+        final long start = System.currentTimeMillis();
+        morphium.getDatabase().runCommand(cmd, new SingleResultCallback<Document>() {
+            @Override
+            public void onResult(Document result, Throwable t) {
+                if (t != null) {
+                    if (cb != null)
+                        cb.onOperationError(AsyncOperationType.DISTINCT, QueryImpl.this, System.currentTimeMillis() - start, getType(), getCollectionName(), t.getMessage(), t, null);
+                } else {
+                    BsonArray arr = (BsonArray) result.get("values");
+                    l.addAll(arr);
+                    if (cb != null)
+                        cb.onOperationSucceeded(AsyncOperationType.DISTINCT, QueryImpl.this, System.currentTimeMillis() - start, getType(), getCollectionName(), l, null);
+                    //TODO: check results?
+                }
+            }
+        });
+        if (cb == null) {
+            try {
+                l.wait(morphium.getConfig().getAsyncOperationTimeout());
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            }
+            return l;
+
+        } else {
+            return null;
+
+        }
     }
 
     @Override
@@ -258,7 +291,7 @@ public class QueryImpl<T> implements Query<T>, Cloneable {
     }
 
     @Override
-    public T complexQueryOne(Document query, Map<String, Integer> sort, int skip) {
+    public T complexQueryOne(Document query, Map<String, Object> sort, int skip) {
         List<T> ret = complexQuery(query, sort, skip, 1);
         if (ret != null && !ret.isEmpty()) {
             return ret.get(0);
@@ -267,7 +300,7 @@ public class QueryImpl<T> implements Query<T>, Cloneable {
     }
 
     @Override
-    public T complexQueryOne(Document query, Map<String, Integer> sort) {
+    public T complexQueryOne(Document query, Map<String, Object> sort) {
         return complexQueryOne(query, sort, 0);
     }
 
@@ -463,9 +496,9 @@ public class QueryImpl<T> implements Query<T>, Cloneable {
                 long start = System.currentTimeMillis();
                 try {
                     long ret = countAll();
-                    c.onOperationSucceeded(AsyncOperationType.READ, QueryImpl.this, System.currentTimeMillis() - start, null, null, ret);
+                    c.onOperationSucceeded(AsyncOperationType.READ, QueryImpl.this, System.currentTimeMillis() - start, getType(), getCollectionName(), null, null, ret);
                 } catch (Exception e) {
-                    c.onOperationError(AsyncOperationType.READ, QueryImpl.this, System.currentTimeMillis() - start, e.getMessage(), e, null);
+                    c.onOperationError(AsyncOperationType.READ, QueryImpl.this, System.currentTimeMillis() - start, getType(), getCollectionName(), e.getMessage(), e, null);
                 }
             }
         };
@@ -479,23 +512,18 @@ public class QueryImpl<T> implements Query<T>, Cloneable {
         morphium.inc(StatisticKeys.READS);
         long start = System.currentTimeMillis();
 
-        DBCollection collection = morphium.getDatabase().getCollection(getCollectionName());
+        MongoCollection collection = morphium.getDatabase().getCollection(getCollectionName());
         setReadPreferenceFor(collection);
-        for (int i = 0; i < morphium.getConfig().getRetriesOnNetworkError(); i++) {
-            try {
                 DBCursor cu = collection.find(toQueryObject());
                 long ret = cu.count();
                 srv = cu.getServerAddress();
                 morphium.fireProfilingReadEvent(QueryImpl.this, System.currentTimeMillis() - start, ReadAccessType.COUNT);
                 return ret;
-            } catch (RuntimeException e) {
-                morphium.handleNetworkError(i, e);
-            }
         }
         return 0;
     }
 
-    private void setReadPreferenceFor(DBCollection c) {
+    private void setReadPreferenceFor(MongoCollection c) {
         if (readPreference != null) {
             c.setReadPreference(readPreference);
         } else {
@@ -520,7 +548,7 @@ public class QueryImpl<T> implements Query<T>, Cloneable {
     @Override
     public Document toQueryObject() {
         Document o = new Document();
-        BasicDBList lst = new BasicDBList();
+        BsonArray lst = new BsonArray();
         boolean onlyAnd = orQueries.isEmpty() && norQueries.isEmpty() && where == null;
         if (where != null) {
             o.put("$where", where);
@@ -542,14 +570,14 @@ public class QueryImpl<T> implements Query<T>, Cloneable {
             }
 
             o.put("$and", lst);
-            lst = new BasicDBList();
+            lst = new BsonArray();
         }
         if (orQueries.size() != 0) {
             for (Query<T> ex : orQueries) {
                 lst.add(ex.toQueryObject());
             }
             if (o.get("$and") != null) {
-                ((BasicDBList) o.get("$and")).add(new Document("$or", lst));
+                ((BsonArray) o.get("$and")).add(new Document("$or", lst));
             } else {
                 o.put("$or", lst);
             }
@@ -560,7 +588,7 @@ public class QueryImpl<T> implements Query<T>, Cloneable {
                 lst.add(ex.toQueryObject());
             }
             if (o.get("$and") != null) {
-                ((BasicDBList) o.get("$and")).add(new Document("$nor", lst));
+                ((BsonArray) o.get("$and")).add(new Document("$nor", lst));
             } else {
                 o.put("$nor", lst);
             }
@@ -595,9 +623,9 @@ public class QueryImpl<T> implements Query<T>, Cloneable {
                 long start = System.currentTimeMillis();
                 try {
                     List<T> lst = asList();
-                    callback.onOperationSucceeded(AsyncOperationType.READ, QueryImpl.this, System.currentTimeMillis() - start, lst, null);
+                    callback.onOperationSucceeded(AsyncOperationType.READ, QueryImpl.this, System.currentTimeMillis() - start, getType(), getCollectionName(), lst, null);
                 } catch (Exception e) {
-                    callback.onOperationError(AsyncOperationType.READ, QueryImpl.this, System.currentTimeMillis() - start, e.getMessage(), e, null);
+                    callback.onOperationError(AsyncOperationType.READ, QueryImpl.this, System.currentTimeMillis() - start, getType(), getCollectionName(), e.getMessage(), e, null);
                 }
             }
         };
@@ -622,7 +650,7 @@ public class QueryImpl<T> implements Query<T>, Cloneable {
 
         }
         long start = System.currentTimeMillis();
-        DBCollection collection = morphium.getDatabase().getCollection(getCollectionName());
+        MongoCollection collection = morphium.getDatabase().getCollection(getCollectionName());
         setReadPreferenceFor(collection);
         Document lst = getFieldListForQuery();
 
@@ -754,9 +782,9 @@ public class QueryImpl<T> implements Query<T>, Cloneable {
                     T res = getById(id);
                     List<T> result = new ArrayList<T>();
                     result.add(res);
-                    callback.onOperationSucceeded(AsyncOperationType.READ, QueryImpl.this, System.currentTimeMillis() - start, result, res);
+                    callback.onOperationSucceeded(AsyncOperationType.READ, QueryImpl.this, System.currentTimeMillis() - start, getType(), getCollectionName(), result, res);
                 } catch (Exception e) {
-                    callback.onOperationError(AsyncOperationType.READ, QueryImpl.this, System.currentTimeMillis() - start, e.getMessage(), e, null);
+                    callback.onOperationError(AsyncOperationType.READ, QueryImpl.this, System.currentTimeMillis() - start, getType(), getCollectionName(), e.getMessage(), e, null);
                 }
             }
         };
@@ -817,7 +845,7 @@ public class QueryImpl<T> implements Query<T>, Cloneable {
             morphium.inc(StatisticKeys.NO_CACHED_READS);
         }
         long start = System.currentTimeMillis();
-        DBCollection coll = morphium.getDatabase().getCollection(getCollectionName());
+        MongoCollection coll = morphium.getDatabase().getCollection(getCollectionName());
         setReadPreferenceFor(coll);
         Document fl = getFieldListForQuery();
 
@@ -881,9 +909,9 @@ public class QueryImpl<T> implements Query<T>, Cloneable {
                 long start = System.currentTimeMillis();
                 try {
                     List<Object> ret = idList();
-                    callback.onOperationSucceeded(AsyncOperationType.READ, QueryImpl.this, System.currentTimeMillis() - start, null, null, ret);
+                    callback.onOperationSucceeded(AsyncOperationType.READ, QueryImpl.this, System.currentTimeMillis() - start, getType(), getCollectionName(), null, null, ret);
                 } catch (Exception e) {
-                    callback.onOperationError(AsyncOperationType.READ, QueryImpl.this, System.currentTimeMillis() - start, e.getMessage(), e, null);
+                    callback.onOperationError(AsyncOperationType.READ, QueryImpl.this, System.currentTimeMillis() - start, getType(), getCollectionName(), e.getMessage(), e, null);
                 }
             }
         };
@@ -911,7 +939,7 @@ public class QueryImpl<T> implements Query<T>, Cloneable {
             morphium.inc(StatisticKeys.NO_CACHED_READS);
         }
         long start = System.currentTimeMillis();
-        DBCollection collection = morphium.getDatabase().getCollection(getCollectionName());
+        MongoCollection collection = morphium.getDatabase().getCollection(getCollectionName());
         setReadPreferenceFor(collection);
         for (int i = 0; i < morphium.getConfig().getRetriesOnNetworkError(); i++) {
             try {
@@ -1071,7 +1099,7 @@ public class QueryImpl<T> implements Query<T>, Cloneable {
         if (!result.ok()) {
             return null;
         }
-        BasicDBList lst = (BasicDBList) result.get("results");
+        BsonArray lst = (BsonArray) result.get("results");
         List<T> ret = new ArrayList<T>();
         for (Object o : lst) {
             Document obj = (Document) o;
